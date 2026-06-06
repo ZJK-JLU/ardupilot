@@ -486,6 +486,7 @@ public:
 };
 
 /*
+上面的参数已经满了 在上面添加会报错 因此自定义参数要在G2里添加
   2nd block of parameters, to avoid going past 256 top level keys
  */
 class ParametersG2 {
