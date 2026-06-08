@@ -5,11 +5,11 @@
 //
 // File: rtwtypes.h
 //
-// Code generated for Simulink model 'attctlslx'.
+// Code generated for Simulink model 'arduAttCont'.
 //
-// Model version                  : 1.2
+// Model version                  : 1.4
 // Simulink Coder version         : 9.9 (R2023a) 19-Nov-2022
-// C/C++ source code generated on : Mon Jun  8 11:46:04 2026
+// C/C++ source code generated on : Mon Jun  8 18:28:52 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: ARM Compatible->ARM Cortex-M

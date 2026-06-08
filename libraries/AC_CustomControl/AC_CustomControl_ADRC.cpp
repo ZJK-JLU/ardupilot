@@ -75,15 +75,19 @@ Vector3f AC_CustomControl_ADRC::update(void)
     Vector3f ang_vel_body_feedforward = rotation_target_to_body * _att_control->get_attitude_target_ang_vel();
     Vector3f gyro_latest = _ahrs->get_gyro_latest();
 
-    float arg_atterr{ 0.0F };
+    // '<Root>/attiude_error'
+    float arg_attiude_error[3]{ attitude_error.x, attitude_error.y, attitude_error.z };
 
-    // '<Root>/rate'
-    float arg_rate{ 0.0F };
+    // '<Root>/rate_ff'
+    float arg_rate_ff[3]{ ang_vel_body_feedforward.x, ang_vel_body_feedforward.y, ang_vel_body_feedforward.z };
+
+    // '<Root>/rate_meas'
+    float arg_rate_meas[3]{gyro_latest.x, gyro_latest.y, gyro_latest.z };
 
     // '<Root>/Out1'
-    float arg_Out1;
+    float arg_Out1[3];
 
-    simulink_controller.step(&arg_atterr, &arg_rate, &arg_Out1);
+    simulink_controller.step(arg_attiude_error, arg_rate_ff, arg_rate_meas, arg_Out1);
 
     // arducopter main attitude controller already ran
     // we don't need to do anything else
@@ -91,7 +95,7 @@ Vector3f AC_CustomControl_ADRC::update(void)
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ADRC custom controller working");
 
     // return what arducopter main controller outputted
-    return Vector3f(_motors->get_roll(), _motors->get_pitch(), _motors->get_yaw());
+    return Vector3f(arg_Out1[0], arg_Out1[1], arg_Out1[2]);
 }
 
 // reset controller to avoid build up on the ground

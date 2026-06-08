@@ -5,11 +5,11 @@
 //
 // File: ert_main.cpp
 //
-// Code generated for Simulink model 'attctlslx'.
+// Code generated for Simulink model 'arduAttCont'.
 //
-// Model version                  : 1.2
+// Model version                  : 1.4
 // Simulink Coder version         : 9.9 (R2023a) 19-Nov-2022
-// C/C++ source code generated on : Mon Jun  8 11:46:04 2026
+// C/C++ source code generated on : Mon Jun  8 18:28:52 2026
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: ARM Compatible->ARM Cortex-M
@@ -17,18 +17,21 @@
 // Validation result: Not run
 //
 #include <stdio.h>              // This example main program uses printf/fflush
-#include "attctlslx.h"                 // Model header file
+#include "arduAttCont.h"               // Model header file
 
-static attctlslx attctlslx_Obj;        // Instance of model class
+static arduAttCont arduAttCont_Obj;    // Instance of model class
 
-// '<Root>/atterr'
-static real32_T arg_atterr{ 0.0F };
+// '<Root>/attiude_error'
+static real32_T arg_attiude_error[3]{ 0.0F, 0.0F, 0.0F };
 
-// '<Root>/rate'
-static real32_T arg_rate{ 0.0F };
+// '<Root>/rate_ff'
+static real32_T arg_rate_ff[3]{ 0.0F, 0.0F, 0.0F };
+
+// '<Root>/rate_meas'
+static real32_T arg_rate_meas[3]{ 0.0F, 0.0F, 0.0F };
 
 // '<Root>/Out1'
-static real32_T arg_Out1;
+static real32_T arg_Out1[3];
 
 //
 // Associating rt_OneStep with a real-time clock or interrupt service routine
@@ -50,7 +53,7 @@ void rt_OneStep(void)
 
   // Check for overrun
   if (OverrunFlag) {
-    rtmSetErrorStatus(attctlslx_Obj.getRTM(), "Overrun");
+    rtmSetErrorStatus(arduAttCont_Obj.getRTM(), "Overrun");
     return;
   }
 
@@ -61,7 +64,7 @@ void rt_OneStep(void)
   // Set model inputs here
 
   // Step the model
-  attctlslx_Obj.step(&arg_atterr, &arg_rate, &arg_Out1);
+  arduAttCont_Obj.step(arg_attiude_error, arg_rate_ff, arg_rate_meas, arg_Out1);
 
   // Get model outputs here
 
@@ -86,7 +89,7 @@ int_T main(int_T argc, const char *argv[])
   (void)(argv);
 
   // Initialize model
-  attctlslx_Obj.initialize();
+  arduAttCont_Obj.initialize();
 
   // Attach rt_OneStep to a timer or interrupt service routine with
   //  period 0.0025 seconds (base rate of the model) here.
@@ -98,12 +101,12 @@ int_T main(int_T argc, const char *argv[])
          "Generated ERT main won't simulate model step behavior. "
          "To change this behavior select the 'MAT-file logging' option.\n");
   fflush((nullptr));
-  while (rtmGetErrorStatus(attctlslx_Obj.getRTM()) == (nullptr)) {
+  while (rtmGetErrorStatus(arduAttCont_Obj.getRTM()) == (nullptr)) {
     //  Perform application tasks here
   }
 
   // Terminate model
-  attctlslx_Obj.terminate();
+  arduAttCont_Obj.terminate();
   return 0;
 }
 
