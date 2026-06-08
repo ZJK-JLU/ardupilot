@@ -153,6 +153,7 @@ class Board:
             )
             env.AP_LIBRARIES += [
                 'AC_CustomControl'
+                'AC_ADRC'
             ]
             cfg.msg("Enabled custom controller", 'yes')
         else:

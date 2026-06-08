@@ -4,6 +4,8 @@
 
 #if AP_CUSTOMCONTROL_ADRC_ENABLED
 
+#include <AC_ADRC/attctlslx.h>
+
 #include "AC_CustomControl_Backend.h"
 
 class AC_CustomControl_ADRC : public AC_CustomControl_Backend {
@@ -13,6 +15,8 @@ public:
 
     Vector3f update(void) override;
     void reset(void) override;
+
+    attctlslx simulink_controller;
 
     // user settable parameters
     static const struct AP_Param::GroupInfo var_info[];

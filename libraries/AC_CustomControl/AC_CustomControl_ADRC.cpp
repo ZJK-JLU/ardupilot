@@ -34,6 +34,8 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
     AC_CustomControl_Backend(frontend, ahrs, att_control, motors, dt)
 {
     AP_Param::setup_object_defaults(this, var_info);
+
+    simulink_controller.initialize();
 }
 
 // update controller
@@ -55,6 +57,33 @@ Vector3f AC_CustomControl_ADRC::update(void)
             // we are off the ground
             break;
     }
+
+    // run custom controller after here
+    Quaternion attitude_body, attitude_target;
+    _ahrs->get_quat_body_to_ned(attitude_body);
+
+    attitude_target = _att_control->get_attitude_target_quat();
+    // This vector represents the angular error to rotate the thrust vector using x and y and heading using z
+    Vector3f attitude_error;
+    float _thrust_angle, _thrust_error_angle;
+    _att_control->thrust_heading_rotation_angles(attitude_target, attitude_body, attitude_error, _thrust_angle, _thrust_error_angle);
+
+    // recalculate ang vel feedforward from attitude target model
+    // rotation from the target frame to the body frame
+    Quaternion rotation_target_to_body = attitude_body.inverse() * attitude_target;
+    // target angle velocity vector in the body frame
+    Vector3f ang_vel_body_feedforward = rotation_target_to_body * _att_control->get_attitude_target_ang_vel();
+    Vector3f gyro_latest = _ahrs->get_gyro_latest();
+
+    float arg_atterr{ 0.0F };
+
+    // '<Root>/rate'
+    float arg_rate{ 0.0F };
+
+    // '<Root>/Out1'
+    float arg_Out1;
+
+    simulink_controller.step(&arg_atterr, &arg_rate, &arg_Out1);
 
     // arducopter main attitude controller already ran
     // we don't need to do anything else
