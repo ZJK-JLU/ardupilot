@@ -11,7 +11,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_AHRS/AP_AHRS_View.h>
 #include <AC_AttitudeControl/AC_AttitudeControl.h>
-#include <AP_Motors/AP_MotorsMulticopter.h>
+#include <AP_Motors/AP_Motors_Class.h>
 
 #ifndef CUSTOMCONTROL_MAX_TYPES
 #define CUSTOMCONTROL_MAX_TYPES 3
@@ -21,7 +21,16 @@ class AC_CustomControl_Backend;
 
 class AC_CustomControl {
 public:
-    AC_CustomControl(AP_AHRS_View*& ahrs, AC_AttitudeControl*& _att_control, AP_MotorsMulticopter*& motors, float dt);
+    template <typename MotorsT>
+    AC_CustomControl(AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, MotorsT*& motors, float dt) :
+        _dt(dt),
+        _ahrs(ahrs),
+        _att_control(att_control),
+        _motors_ref(&motors),
+        _motors_getter(get_motors_from_ref<MotorsT>)
+    {
+        AP_Param::setup_object_defaults(this, var_info);
+    }
 
     CLASS_NO_COPY(AC_CustomControl);  /* Do not allow copies */
 
@@ -32,6 +41,8 @@ public:
     void reset_main_att_controller(void);
     bool is_safe_to_run(void);
     void log_switch(void);
+
+    AP_Motors* get_motors() const;    
 
     // set the PID notch sample rates
     void set_notch_sample_rate(float sample_rate);
@@ -65,7 +76,14 @@ protected:
     // References to external libraries
     AP_AHRS_View*& _ahrs;
     AC_AttitudeControl*& _att_control;
-    AP_MotorsMulticopter*& _motors;
+    void* _motors_ref;
+    AP_Motors* (*_motors_getter)(void*);
+
+    template <typename MotorsT>
+    static AP_Motors* get_motors_from_ref(void* motors_ref)
+    {
+        return static_cast<AP_Motors*>(*static_cast<MotorsT**>(motors_ref));
+    }
 
     AP_Enum<CustomControlType> _controller_type;
     AP_Int8 _custom_controller_mask;

@@ -42,32 +42,36 @@ const AP_Param::GroupInfo AC_CustomControl::var_info[] = {
 
 const struct AP_Param::GroupInfo *AC_CustomControl::_backend_var_info[CUSTOMCONTROL_MAX_TYPES];
 
-AC_CustomControl::AC_CustomControl(AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, AP_MotorsMulticopter*& motors, float dt) :
-    _dt(dt),
-    _ahrs(ahrs),
-    _att_control(att_control),
-    _motors(motors)
+AP_Motors* AC_CustomControl::get_motors() const
 {
-    AP_Param::setup_object_defaults(this, var_info);
+    if (_motors_getter == nullptr) {
+        return nullptr;
+    }
+    return _motors_getter(_motors_ref);
 }
 
 void AC_CustomControl::init(void)
 {
+    AP_Motors* motors = get_motors();
+    if (motors == nullptr) {
+        return;
+    }
+
     switch (CustomControlType(_controller_type))
     {
         case CustomControlType::CONT_NONE:
             break;
         case CustomControlType::CONT_EMPTY: // This is template backend. Don't initialize it.
             // This is template backend. Don't initialize it.
-            // _backend = NEW_NOTHROW AC_CustomControl_Empty(*this, _ahrs, _att_control, _motors, _dt);
+            // _backend = NEW_NOTHROW AC_CustomControl_Empty(*this, _ahrs, _att_control, motors, _dt);
             // _backend_var_info[get_type()] = AC_CustomControl_Empty::var_info;
             break;
         case CustomControlType::CONT_PID:
-            _backend = NEW_NOTHROW AC_CustomControl_PID(*this, _ahrs, _att_control, _motors, _dt);
+            _backend = NEW_NOTHROW AC_CustomControl_PID(*this, _ahrs, _att_control, motors, _dt);
             _backend_var_info[get_type()] = AC_CustomControl_PID::var_info;
             break;
         case CustomControlType::CONT_ADRC:
-            _backend = NEW_NOTHROW AC_CustomControl_ADRC(*this, _ahrs, _att_control, _motors, _dt);
+            _backend = NEW_NOTHROW AC_CustomControl_ADRC(*this, _ahrs, _att_control, motors, _dt);
             _backend_var_info[get_type()] = AC_CustomControl_ADRC::var_info;
             break;
         default:
@@ -93,16 +97,20 @@ void AC_CustomControl::update(void)
 
 // choose which axis to apply custom controller output
 void AC_CustomControl::motor_set(Vector3f rpy) {
+    AP_Motors* motors = get_motors();
+    if (motors == nullptr) {
+        return;
+    }
     if (_custom_controller_mask & (uint8_t)CustomControlOption::ROLL) {
-        _motors->set_roll(rpy.x);
+        motors->set_roll(rpy.x);
         _att_control->get_rate_roll_pid().set_integrator(0.0);
     }
     if (_custom_controller_mask & (uint8_t)CustomControlOption::PITCH) {
-        _motors->set_pitch(rpy.y);
+        motors->set_pitch(rpy.y);
         _att_control->get_rate_pitch_pid().set_integrator(0.0);
     }
     if (_custom_controller_mask & (uint8_t)CustomControlOption::YAW) {
-        _motors->set_yaw(rpy.z);
+        motors->set_yaw(rpy.z);
         _att_control->get_rate_yaw_pid().set_integrator(0.0);
     }
 }
@@ -176,7 +184,7 @@ void AC_CustomControl::set_custom_controller(bool enabled)
 // check that RC switch is on, backend is not changed mid flight and controller type is selected
 bool AC_CustomControl::is_safe_to_run(void) {
     if (_custom_controller_active && (_controller_type > CustomControlType::CONT_NONE)
-        && (_controller_type <= CUSTOMCONTROL_MAX_TYPES) && _backend != nullptr)
+        && (_controller_type <= CUSTOMCONTROL_MAX_TYPES) && _backend != nullptr && get_motors() != nullptr)
     {
         return true;
     }
