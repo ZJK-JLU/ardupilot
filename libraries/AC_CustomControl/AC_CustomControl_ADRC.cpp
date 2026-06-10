@@ -92,7 +92,7 @@ Vector3f AC_CustomControl_ADRC::update(void)
     // arducopter main attitude controller already ran
     // we don't need to do anything else
 
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ADRC custom controller working");
+    //GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ADRC custom controller working");
 
     // return what arducopter main controller outputted
     return Vector3f(arg_Out1[0], arg_Out1[1], arg_Out1[2]);
