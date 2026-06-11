@@ -321,6 +321,8 @@ AC_AttitudeControl_Heli::AC_AttitudeControl_Heli(AP_AHRS_View &ahrs, const AP_Mu
 }
 
 // passthrough_bf_roll_pitch_rate_yaw - passthrough the pilots roll and pitch inputs directly to swashplate for flybar acro mode
+//把飞行员的横滚和俯仰指令直接传给斜盘（不加任何姿态稳定），
+//同时把偏航指令作为角速度目标（带加速度限制），并保持横滚和俯仰的角速度目标等于当前实际角速度，从而实现“放松”控制，让飞行员完全手动操控飞机
 void AC_AttitudeControl_Heli::passthrough_bf_roll_pitch_rate_yaw(float roll_passthrough, float pitch_passthrough, float yaw_rate_bf_cds)
 {
     // convert from centidegrees on public interface to radians
@@ -390,6 +392,7 @@ void AC_AttitudeControl_Heli::passthrough_bf_roll_pitch_rate_yaw(float roll_pass
     _thrust_error_angle = _att_error_rot_vec_rad.xy().length();
 }
 
+// 把“期望角速度”和“实际角速度”的差值（即角速度误差）累积起来，变成“角度误差”
 void AC_AttitudeControl_Heli::integrate_bf_rate_error_to_angle_errors()
 {
     // Integrate the angular velocity error into the attitude error
@@ -401,7 +404,7 @@ void AC_AttitudeControl_Heli::integrate_bf_rate_error_to_angle_errors()
     _att_error_rot_vec_rad.z = constrain_float(_att_error_rot_vec_rad.z, -AC_ATTITUDE_HELI_ACRO_OVERSHOOT_ANGLE_RAD, AC_ATTITUDE_HELI_ACRO_OVERSHOOT_ANGLE_RAD);
 }
 
-// subclass non-passthrough too, for external gyro, no flybar
+// subclass non-passthrough too, for external gyro, no flybar重写基类的速率控制函数，在标准处理之前先保存偏航速率，以满足无平衡杆直升机的特殊需求
 void AC_AttitudeControl_Heli::input_rate_bf_roll_pitch_yaw(float roll_rate_bf_cds, float pitch_rate_bf_cds, float yaw_rate_bf_cds)
 {
     _passthrough_yaw = yaw_rate_bf_cds;
