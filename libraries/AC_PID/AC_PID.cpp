@@ -153,6 +153,7 @@ void AC_PID::set_slew_limit(float smax)
     _slew_rate_max.set(fabsf(smax));
 }
 
+//用于设置PID控制器中陷波滤波器的采样率，确保滤波器参数与实际采样频率匹配，从而正确滤除目标频率的噪声
 void AC_PID::set_notch_sample_rate(float sample_rate)
 {
 #if AP_FILTER_ENABLED
@@ -233,6 +234,7 @@ float AC_PID::update_all(float target, float measurement, float dt, bool limit, 
             target = _target_notch->apply(target);
         }
 #endif
+        //目标值的低通滤波
         _target += get_filt_T_alpha(dt) * (target - _target);
 
         // Calculate error and apply error filter
@@ -243,9 +245,11 @@ float AC_PID::update_all(float target, float measurement, float dt, bool limit, 
             error = _error_notch->apply(error);
         }
 #endif
+        //误差值的低通滤波
         _error += get_filt_E_alpha(dt) * (error - _error);
 
         // calculate and filter derivative
+        //计算D值  执行微分的低通滤波 
         if (is_positive(dt)) {
             float derivative = (_error - error_last) / dt;
             _derivative += get_filt_D_alpha(dt) * (derivative - _derivative);
@@ -260,6 +264,7 @@ float AC_PID::update_all(float target, float measurement, float dt, bool limit, 
     float D_out = (_derivative * _kd);
 
     // calculate slew limit modifier for P+D
+    //限制P+D的变化速率
     _pid_info.Dmod = _slew_limiter.modifier((_pid_info.P + _pid_info.D) * _slew_limit_scale, dt);
     _pid_info.slew_rate = _slew_limiter.get_slew_rate();
 
@@ -270,6 +275,7 @@ float AC_PID::update_all(float target, float measurement, float dt, bool limit, 
     P_out *= boost;
     D_out *= boost;
 
+    //用于防止比例项（P）和微分项（D）的输出总和超过设定的最大值，从而避免控制信号饱和和提高系统稳定性。
     _pid_info.PD_limit = false;
     // Apply PD sum limit if enabled
     if (is_positive(_kpdmax)) {
@@ -282,6 +288,7 @@ float AC_PID::update_all(float target, float measurement, float dt, bool limit, 
         }
     }
 
+    //计算kff和kdff 用于前馈控制
     _pid_info.target = _target;
     _pid_info.actual = measurement;
     _pid_info.error = _error;
@@ -321,6 +328,7 @@ float AC_PID::update_error(float error, float dt, bool limit)
 
 //  update_i - update the integral
 //  If the limit flag is set the integral is only allowed to shrink
+//  计算积分项 同时防止在执行机构饱和方向继续积累  做了积分限幅
 void AC_PID::update_i(float dt, bool limit)
 {
     if (!is_zero(_ki) && is_positive(dt)) {
@@ -408,12 +416,14 @@ float AC_PID::get_filt_D_alpha(float dt) const
     return calc_lowpass_alpha_dt(dt, _filt_D_hz);
 }
 
+//允许外部代码手动设置积分器的值，常用于初始化、重置或特殊补偿场景。
 void AC_PID::set_integrator(float integrator)
 {
     _flags._I_set = true;
     _integrator = constrain_float(integrator, -_kimax, _kimax);
 }
 
+//实现积分器值的平滑过渡 避免积分器突变导致的控制信号冲击
 void AC_PID::relax_integrator(float integrator, float dt, float time_constant)
 {
     integrator = constrain_float(integrator, -_kimax, _kimax);

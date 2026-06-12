@@ -417,7 +417,7 @@ void AC_AttitudeControl_Heli::input_rate_bf_roll_pitch_yaw(float roll_rate_bf_cd
 //
 
 // rate_controller_run - run lowest level rate controller and send outputs to the motors
-// should be called at 100hz or more
+// should be called at 100hz or more将角速度目标转换为电机控制信号
 void AC_AttitudeControl_Heli::rate_controller_run()
 {	
     _ang_vel_body += _sysid_ang_vel_body;
@@ -444,7 +444,7 @@ void AC_AttitudeControl_Heli::rate_controller_run()
 
 }
 
-// Update Alt_Hold angle maximum
+// Update Alt_Hold angle maximum动态计算并平滑更新定高模式下的最大允许倾斜角
 void AC_AttitudeControl_Heli::update_althold_lean_angle_max(float throttle_in)
 {
     float althold_lean_angle_max = acosf(constrain_float(throttle_in / AC_ATTITUDE_HELI_ANGLE_LIMIT_THROTTLE_MAX, 0.0f, 1.0f));
@@ -460,6 +460,7 @@ void AC_AttitudeControl_Heli::update_althold_lean_angle_max(float throttle_in)
 //
 
 // rate_bf_to_motor_roll_pitch - ask the rate controller to calculate the motor outputs to achieve the target rate in radians/second
+//根据期望的角速度和实际角速度，通过PID控制器计算出应该给电机多大的横滚和俯仰修正量，然后输出给电机
 void AC_AttitudeControl_Heli::rate_bf_to_motor_roll_pitch(const Vector3f &rate_rads, float rate_roll_target_rads, float rate_pitch_target_rads)
 {
 
@@ -512,6 +513,7 @@ void AC_AttitudeControl_Heli::rate_bf_to_motor_roll_pitch(const Vector3f &rate_r
 }
 
 // rate_bf_to_motor_yaw - ask the rate controller to calculate the motor outputs to achieve the target rate in radians/second
+//通过 PID 控制器计算出偏航通道的电机输出，并返回该值
 float AC_AttitudeControl_Heli::rate_target_to_motor_yaw(float rate_yaw_actual_rads, float rate_target_rads)
 {
     if (!((AP_MotorsHeli&)_motors).rotor_runup_complete()) {
@@ -535,7 +537,7 @@ float AC_AttitudeControl_Heli::rate_target_to_motor_yaw(float rate_yaw_actual_ra
 
 //
 // throttle functions
-//
+// 在保持高度的同时，通过动态调整油门来补偿倾斜的影响，使飞行更平稳
 
 void AC_AttitudeControl_Heli::set_throttle_out(float throttle_in, bool apply_angle_boost, float filter_cutoff)
 {
@@ -554,7 +556,7 @@ void AC_AttitudeControl_Heli::set_throttle_out(float throttle_in, bool apply_ang
 }
 
 // returns a throttle including compensation for roll/pitch angle
-// throttle value should be 0 ~ 1
+// throttle value should be 0 ~ 1根据当前飞机的倾斜角度和目标的推力角度，计算出一个补偿因子，对油门进行调整
 float AC_AttitudeControl_Heli::get_throttle_boosted(float throttle_in)
 {
     if (!_angle_boost_enabled) {
@@ -576,7 +578,8 @@ float AC_AttitudeControl_Heli::get_throttle_boosted(float throttle_in)
     return throttle_out;
 }
 
-// get_roll_trim - angle in centi-degrees to be added to roll angle for learn hover collective. Used by helicopter to counter tail rotor thrust in hover
+// 返回一个动态的横滚配平值（单位厘度），用于抵消尾桨推力
+//get_roll_trim - angle in centi-degrees to be added to roll angle for learn hover collective. Used by helicopter to counter tail rotor thrust in hover
 float AC_AttitudeControl_Heli::get_roll_trim_cd()
 {
     // hover roll trim is given the opposite sign in inverted flight since the tail rotor thrust is pointed in the opposite direction. 
@@ -584,7 +587,7 @@ float AC_AttitudeControl_Heli::get_roll_trim_cd()
     return constrain_float(_hover_roll_trim_scalar * _hover_roll_trim * inverted_factor, -1000.0f,1000.0f);
 }
 
-// Command an euler roll and pitch angle and an euler yaw rate with angular velocity feedforward and smoothing
+// Command an euler roll and pitch angle and an euler yaw rate with angular velocity feedforward and smoothing倒着飞时反转滚转角
 void AC_AttitudeControl_Heli::input_euler_angle_roll_pitch_euler_rate_yaw(float euler_roll_angle_cd, float euler_pitch_angle_cd, float euler_yaw_rate_cds)
 {
     if (_inverted_flight) {
@@ -611,7 +614,7 @@ void AC_AttitudeControl_Heli::set_notch_sample_rate(float sample_rate)
 #endif
 }
 
-// Command a thrust vector and heading rate
+// Command a thrust vector and heading rate  用于同时控制飞机的飞行方向（通过推力向量）和机头旋转速度
 void AC_AttitudeControl_Heli::input_thrust_vector_rate_heading(const Vector3f& thrust_vector, float heading_rate_cds, bool slew_yaw)
 {
 
