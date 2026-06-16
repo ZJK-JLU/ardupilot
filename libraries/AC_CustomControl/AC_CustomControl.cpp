@@ -16,7 +16,7 @@ const AP_Param::GroupInfo AC_CustomControl::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: Custom control type
     // @Description: Custom control type to be used
-    // @Values: 0:None, 1:Empty, 2:PID
+    // @Values: 0:None, 1:Empty, 2:PID, 3:ADRC
     // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 1, AC_CustomControl, _controller_type, 0, AP_PARAM_FLAG_ENABLE),
@@ -44,7 +44,7 @@ const struct AP_Param::GroupInfo *AC_CustomControl::_backend_var_info[CUSTOMCONT
 
 AP_Motors* AC_CustomControl::get_motors() const
 {
-    if (_motors_getter == nullptr) {
+    if ((_motors_getter == nullptr) || (_motors_ref == nullptr)) {
         return nullptr;
     }
     return _motors_getter(_motors_ref);
@@ -56,6 +56,8 @@ void AC_CustomControl::init(void)
     if (motors == nullptr) {
         return;
     }
+
+    _backend = nullptr;
 
     switch (CustomControlType(_controller_type))
     {
@@ -78,40 +80,45 @@ void AC_CustomControl::init(void)
             return;
     }
 
-    if (_backend && _backend_var_info[get_type()]) {
+    if ((_backend != nullptr) && (_backend_var_info[get_type()] != nullptr)) {
         AP_Param::load_object_from_eeprom(_backend, _backend_var_info[get_type()]);
+        _backend->reset();
     }
 }
 
 // run custom controller if it is activated by RC switch and appropriate type is selected
 void AC_CustomControl::update(void)
 {
-    if (is_safe_to_run()) {
-        Vector3f motor_out_rpy;
-
-        motor_out_rpy = _backend->update();
-
-        motor_set(motor_out_rpy);
+    if (!is_safe_to_run()) {
+        return;
     }
+
+    const Vector3f motor_out_rpy = _backend->update();
+    motor_set(motor_out_rpy);
 }
 
 // choose which axis to apply custom controller output
-void AC_CustomControl::motor_set(Vector3f rpy) {
+void AC_CustomControl::motor_set(const Vector3f& rpy) {
     AP_Motors* motors = get_motors();
-    if (motors == nullptr) {
+    if ((motors == nullptr) || (_att_control == nullptr)) {
         return;
     }
-    if (_custom_controller_mask & (uint8_t)CustomControlOption::ROLL) {
-        motors->set_roll(rpy.x);
-        _att_control->get_rate_roll_pid().set_integrator(0.0);
+
+    const bool roll_valid = isfinite(rpy.x);
+    const bool pitch_valid = isfinite(rpy.y);
+    const bool yaw_valid = isfinite(rpy.z);
+
+    if ((_custom_controller_mask & uint8_t(CustomControlOption::ROLL)) && roll_valid) {
+        motors->set_roll(constrain_float(rpy.x, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX));
+        _att_control->get_rate_roll_pid().set_integrator(0.0f);
     }
-    if (_custom_controller_mask & (uint8_t)CustomControlOption::PITCH) {
-        motors->set_pitch(rpy.y);
-        _att_control->get_rate_pitch_pid().set_integrator(0.0);
+    if ((_custom_controller_mask & uint8_t(CustomControlOption::PITCH)) && pitch_valid) {
+        motors->set_pitch(constrain_float(rpy.y, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX));
+        _att_control->get_rate_pitch_pid().set_integrator(0.0f);
     }
-    if (_custom_controller_mask & (uint8_t)CustomControlOption::YAW) {
-        motors->set_yaw(rpy.z);
-        _att_control->get_rate_yaw_pid().set_integrator(0.0);
+    if ((_custom_controller_mask & uint8_t(CustomControlOption::YAW)) && yaw_valid) {
+        motors->set_yaw(constrain_float(rpy.z, -AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX));
+        _att_control->get_rate_yaw_pid().set_integrator(0.0f);
     }
 }
 
@@ -120,14 +127,22 @@ void AC_CustomControl::motor_set(Vector3f rpy) {
 // to allow smooth transition to the primary controller
 void AC_CustomControl::reset_main_att_controller(void)
 {
+        if (_att_control == nullptr) {
+        return;
+    }
+    
     // reset attitude and rate target, if feedforward is enabled
     if (_att_control->get_bf_feedforward()) {
         _att_control->relax_attitude_controllers();
     }
 
-    _att_control->get_rate_roll_pid().set_integrator(0.0);
-    _att_control->get_rate_pitch_pid().set_integrator(0.0);
-    _att_control->get_rate_yaw_pid().set_integrator(0.0);
+    _att_control->get_rate_roll_pid().reset_filter();
+    _att_control->get_rate_pitch_pid().reset_filter();
+    _att_control->get_rate_yaw_pid().reset_filter();
+    
+    _att_control->get_rate_roll_pid().set_integrator(0.0f);
+    _att_control->get_rate_pitch_pid().set_integrator(0.0f);
+    _att_control->get_rate_yaw_pid().set_integrator(0.0f);
 }
 
 void AC_CustomControl::set_custom_controller(bool enabled)
@@ -163,6 +178,7 @@ void AC_CustomControl::set_custom_controller(bool enabled)
     // reset main controller
     if (!enabled) {
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Custom controller is OFF");
+        _backend->reset();
         // don't reset if the empty backend is selected
         if (_controller_type > CustomControlType::CONT_EMPTY) {
             reset_main_att_controller();
@@ -182,9 +198,9 @@ void AC_CustomControl::set_custom_controller(bool enabled)
 }
 
 // check that RC switch is on, backend is not changed mid flight and controller type is selected
-bool AC_CustomControl::is_safe_to_run(void) {
+bool AC_CustomControl::is_safe_to_run(void) const {
     if (_custom_controller_active && (_controller_type > CustomControlType::CONT_NONE)
-        && (_controller_type <= CUSTOMCONTROL_MAX_TYPES) && _backend != nullptr && get_motors() != nullptr)
+        && (_controller_type <= CUSTOMCONTROL_MAX_TYPES) && _backend != nullptr && _att_control != nullptr && get_motors() != nullptr)
     {
         return true;
     }
@@ -193,7 +209,7 @@ bool AC_CustomControl::is_safe_to_run(void) {
 }
 
 // log when the custom controller is switch into
-void AC_CustomControl::log_switch(void) {
+void AC_CustomControl::log_switch(void) const{
     AP::logger().Write("CC", "TimeUS,Type,Act","QBB",
                             AP_HAL::micros64(),
                             _controller_type,

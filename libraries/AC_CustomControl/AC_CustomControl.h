@@ -24,10 +24,12 @@ public:
     template <typename MotorsT>
     AC_CustomControl(AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, MotorsT*& motors, float dt) :
         _dt(dt),
+        _custom_controller_active(false),
         _ahrs(ahrs),
         _att_control(att_control),
         _motors_ref(&motors),
-        _motors_getter(get_motors_from_ref<MotorsT>)
+        _motors_getter(get_motors_from_ref<MotorsT>),
+        _backend(nullptr)
     {
         AP_Param::setup_object_defaults(this, var_info);
     }
@@ -36,11 +38,11 @@ public:
 
     void init(void);
     void update(void);
-    void motor_set(Vector3f motor_out);
+    void motor_set(const Vector3f& motor_out);
     void set_custom_controller(bool enabled);
     void reset_main_att_controller(void);
-    bool is_safe_to_run(void);
-    void log_switch(void);
+    bool is_safe_to_run(void) const;
+    void log_switch(void) const;
 
     AP_Motors* get_motors() const;    
 

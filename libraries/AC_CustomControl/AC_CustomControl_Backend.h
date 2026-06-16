@@ -13,7 +13,8 @@ public:
         _ahrs(ahrs),
         _att_control(att_control),
         _motors(motors),
-        _frontend(frontend)
+        _frontend(frontend),
+        _dt(dt)
     {}
 
     // empty destructor to suppress compiler warning
@@ -34,6 +35,7 @@ protected:
     AC_AttitudeControl*& _att_control;
     AP_Motors* _motors;
     AC_CustomControl& _frontend;
+    const float _dt;
 };
 
 #endif  // AP_CUSTOMCONTROL_ENABLED
