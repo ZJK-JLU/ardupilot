@@ -246,6 +246,11 @@ public:
     // Run angular velocity controller and send outputs to the motors
     virtual void rate_controller_run() = 0;
 
+    // True when the native rate controller considers the rotor/actuator authority too low for
+    // normal closed-loop state accumulation.  The base implementation is false; Heli overrides
+    // this using AP_MotorsHeli::rotor_runup_complete().
+    virtual bool custom_rate_controller_low_authority() { return false; }
+
     // reset target loop rate modifications
     virtual void rate_controller_target_reset() {}
 
