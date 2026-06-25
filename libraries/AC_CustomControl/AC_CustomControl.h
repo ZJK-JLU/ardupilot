@@ -29,6 +29,7 @@ public:
         _att_control(att_control),
         _motors_ref(&motors),
         _motors_getter(get_motors_from_ref<MotorsT>),
+        _last_applied_motor_out(NAN, NAN, NAN),
         _backend(nullptr)
     {
         AP_Param::setup_object_defaults(this, var_info);
@@ -49,6 +50,10 @@ public:
     bool axis_enabled_roll() const { return (_custom_controller_mask & (1U << 0)) != 0; }
     bool axis_enabled_pitch() const { return (_custom_controller_mask & (1U << 1)) != 0; }
     bool axis_enabled_yaw() const { return (_custom_controller_mask & (1U << 2)) != 0; }
+
+    // Last value that customcontrol actually wrote to AP_Motors on each axis.
+    // Used to seed the native rate PID integrator for a smoother handover back to official control.
+    const Vector3f& get_last_applied_motor_out() const { return _last_applied_motor_out; }
 
     // set the PID notch sample rates
     void set_notch_sample_rate(float sample_rate);
@@ -93,6 +98,10 @@ protected:
 
     AP_Enum<CustomControlType> _controller_type;
     AP_Int8 _custom_controller_mask;
+
+    // Updated in motor_set() with the actual normalized roll/pitch/yaw output sent by
+    // customcontrol. NAN means the axis has not recently been overridden.
+    Vector3f _last_applied_motor_out;
 
 private:
     AC_CustomControl_Backend *_backend;

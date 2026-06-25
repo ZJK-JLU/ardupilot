@@ -26,6 +26,18 @@ public:
     // reset controller to avoid build up or abrupt response upon switch, ex: integrator, filter
     virtual void reset() = 0;
 
+    // Notify backend that the RC/custom-control switch requested enable or disable.
+    // Backends can use this to run a smooth transition instead of stepping outputs.
+    virtual void set_enabled(bool enabled) {}
+
+    // True while the backend still needs AC_CustomControl::update() to be called even
+    // after the user requested OFF, for example while blending back to the native controller.
+    virtual bool is_transition_active() const { return false; }
+
+    // True when the custom backend has full authority and the native rate PID integrators
+    // should be suppressed to avoid windup. During handover blends this should be false.
+    virtual bool suppress_main_rate_integrators() const { return true; }
+
     // set the PID notch sample rates
     virtual void set_notch_sample_rate(float sample_rate) {};
 

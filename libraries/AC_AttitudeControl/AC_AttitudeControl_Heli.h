@@ -102,6 +102,13 @@ public:
     // authority until the rotor has completed runup.
     bool custom_rate_controller_low_authority() override;
 
+    // Return the native Heli rate-controller output calculated in rate_controller_run()
+    // before a custom backend optionally overrides roll/pitch/yaw.
+    Vector3f custom_rate_controller_native_output() const override { return _custom_rate_controller_native_output; }
+
+    // Return the Heli leaky-I amount used by the native rate controller this loop.
+    float custom_rate_controller_rate_leak_rate() const override;
+
     // user settable parameters
     static const struct AP_Param::GroupInfo var_info[];
 
@@ -138,6 +145,10 @@ private:
 
     // pass through for yaw if tail_passthrough is set
     float _passthrough_yaw;
+
+    // Last native Heli rate-controller output written to AP_Motors before customcontrol
+    // can override selected axes. Used for bumpless custom-controller handover.
+    Vector3f _custom_rate_controller_native_output;
 
     // get_roll_trim - angle in centi-degrees to be added to roll angle. Used by helicopter to counter tail rotor thrust in hover
     float get_roll_trim_rad() override { return radians(get_roll_trim_cd() * 0.01); }

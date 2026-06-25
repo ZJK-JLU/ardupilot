@@ -234,6 +234,14 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("PIRO_COMP", 11, AC_CustomControl_ADRC, _piro_comp_enabled, 0),
 
+    // @Param: SW_TIME
+    // @DisplayName: Custom ADRC switch blend time
+    // @Description: Time in seconds used to blend between native Heli rate-controller output and ADRC output when enabling or disabling custom control in flight. Zero disables the time ramp.
+    // @Range: 0 5
+    // @Units: s
+    // @User: Advanced
+    AP_GROUPINFO("SW_TIME", 12, AC_CustomControl_ADRC, _switch_blend_time, 0.5f),
+
     AP_GROUPEND
 };
 
@@ -248,6 +256,8 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
     _roll_debug{},
     _pitch_debug{},
     _yaw_debug{},
+    _custom_blend(0.0f),
+    _desired_enabled(false),
     _spool_inhibit_reset_done(false),
     _controller_has_run(false)
 {
@@ -280,6 +290,12 @@ Vector3f AC_CustomControl_ADRC::update(void)
     if (_spool_inhibit_reset_done) {
         reset_controller_state();
         _spool_inhibit_reset_done = false;
+    }
+
+    input.custom_blend = update_custom_blend(input.dt_s);
+    if (!_desired_enabled && input.custom_blend <= 0.0f) {
+        reset_controller_state();
+        return no_override_output();
     }
 
     ControllerOutput output;
@@ -355,9 +371,26 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
     // Latest angular-rate feedback.
     input.gyro_latest_radps = _ahrs->get_gyro_latest();
 
+    // Native official output from AC_AttitudeControl_Heli::rate_controller_run().  During switching,
+    // ADRC blends against this value and updates its ESO with the blended output that reaches motors.
+    input.native_output_rpy = _att_control->custom_rate_controller_native_output();
+    input.custom_blend = _custom_blend;
+    input.leaky_i_leak_rate = _att_control->custom_rate_controller_rate_leak_rate();
+
     if (!isfinite(input.rate_target_body_radps.x) || !isfinite(input.rate_target_body_radps.y) || !isfinite(input.rate_target_body_radps.z) ||
         !isfinite(input.gyro_latest_radps.x) || !isfinite(input.gyro_latest_radps.y) || !isfinite(input.gyro_latest_radps.z)) {
         return false;
+    }
+
+    if ((input.custom_blend < 1.0f) &&
+        ((input.axis_roll_enabled && !isfinite(input.native_output_rpy.x)) ||
+         (input.axis_pitch_enabled && !isfinite(input.native_output_rpy.y)) ||
+         (input.axis_yaw_enabled && !isfinite(input.native_output_rpy.z)))) {
+        return false;
+    }
+
+    if (!isfinite(input.leaky_i_leak_rate) || (input.leaky_i_leak_rate < 0.0f)) {
+        input.leaky_i_leak_rate = 0.0f;
     }
 
     // Custom rate-loop error.  This is available for logging and for future custom-rate-law changes.
@@ -398,13 +431,6 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
     _rate_pitch_adrc.set_dt(input.dt_s);
     _rate_yaw_adrc.set_dt(input.dt_s);
 
-    // Match the official Heli behaviour more closely: piro compensation is no longer unconditional.
-    // It is applied only when CC3_PIRO_COMP is enabled and both roll and pitch are actually controlled
-    // by the custom backend.  The ADRC method rotates slow disturbance states only, not the measured-rate state z1.
-    if (piro_comp_enabled() && input.axis_roll_enabled && input.axis_pitch_enabled) {
-        _rate_roll_adrc.rotate_slow_states_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
-    }
-
     bool valid = true;
 
     if (input.axis_roll_enabled) {
@@ -413,6 +439,9 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                             input.motor_roll_limited,
                                             input.roll_pitch_output_limit,
                                             input.output_scale,
+                                            input.native_output_rpy.x,
+                                            input.custom_blend,
+                                            input.leaky_i_leak_rate,
                                             output.normalized_rpy.x,
                                             &_roll_debug);
     }
@@ -423,6 +452,9 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                              input.motor_pitch_limited,
                                              input.roll_pitch_output_limit,
                                              input.output_scale,
+                                             input.native_output_rpy.y,
+                                             input.custom_blend,
+                                             input.leaky_i_leak_rate,
                                              output.normalized_rpy.y,
                                              &_pitch_debug);
     }
@@ -433,12 +465,22 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                            input.motor_yaw_limited,
                                            input.yaw_output_limit,
                                            input.output_scale,
+                                           input.native_output_rpy.z,
+                                           input.custom_blend,
+                                           input.leaky_i_leak_rate,
                                            output.normalized_rpy.z,
                                            &_yaw_debug);
     }
 
     if (!valid) {
         return false;
+    }
+
+    // Match the official Heli timing: native Heli computes roll/pitch output first,
+    // then rotates the slow I-state for the next loop.  ADRC now does the same by
+    // rotating z2/z3 after update_all(), so the current output is not changed by piro comp.
+    if (piro_comp_enabled() && input.axis_roll_enabled && input.axis_pitch_enabled) {
+        _rate_roll_adrc.rotate_slow_states_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
     }
 
     _last_raw_out.x = input.axis_roll_enabled ? _roll_debug.raw_output : NAN;
@@ -502,7 +544,33 @@ Vector3f AC_CustomControl_ADRC::no_override_output() const
 void AC_CustomControl_ADRC::reset(void)
 {
     reset_controller_state();
+    _custom_blend = 0.0f;
+    _desired_enabled = false;
     _spool_inhibit_reset_done = false;
+}
+
+void AC_CustomControl_ADRC::set_enabled(bool enabled)
+{
+    _desired_enabled = enabled;
+    if (enabled) {
+        // Begin a native->ADRC handover.  update_all() blends from the latest official
+        // Heli output and also seeds the SMAX state from that native output.
+        _custom_blend = 0.0f;
+        _spool_inhibit_reset_done = false;
+    }
+}
+
+bool AC_CustomControl_ADRC::is_transition_active() const
+{
+    return _desired_enabled || (_custom_blend > 0.0f);
+}
+
+bool AC_CustomControl_ADRC::suppress_main_rate_integrators() const
+{
+    // Suppress native PID I only when ADRC has full authority.  During switch-on/off
+    // blends, the native output is still part of the applied command and its integrator
+    // should not be zeroed.
+    return _desired_enabled && (_custom_blend >= 0.999f) && _controller_has_run;
 }
 
 void AC_CustomControl_ADRC::set_notch_sample_rate(float sample_rate)
@@ -538,6 +606,7 @@ void AC_CustomControl_ADRC::reset_for_spool_inhibition()
 {
     if (!_spool_inhibit_reset_done) {
         reset_controller_state();
+        _custom_blend = 0.0f;
         _spool_inhibit_reset_done = true;
     }
 }
@@ -581,6 +650,8 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
     flags |= input.spool_transition ? (1U << 13) : 0U;
     flags |= input.low_control_authority ? (1U << 14) : 0U;
     flags |= input.allow_motor_output ? (1U << 15) : 0U;
+    flags |= is_positive(input.leaky_i_leak_rate) ? (1U << 16) : 0U;
+    flags |= (input.custom_blend < 0.999f) ? (1U << 17) : 0U;
 
     AP::logger().Write("CCAR", "TimeUS,TR,TP,TY,GR,GP,GY,RR,RP,RY,OR,OP,OY,Flg", "QffffffffffffI",
                        AP_HAL::micros64(),
@@ -624,6 +695,28 @@ bool AC_CustomControl_ADRC::option_enabled(uint8_t option) const
 bool AC_CustomControl_ADRC::piro_comp_enabled() const
 {
     return int8_t(_piro_comp_enabled.get()) != 0;
+}
+
+float AC_CustomControl_ADRC::get_switch_blend_time() const
+{
+    return constrain_float(_switch_blend_time.get(), 0.0f, 5.0f);
+}
+
+float AC_CustomControl_ADRC::update_custom_blend(float dt_s)
+{
+    const float blend_time = get_switch_blend_time();
+    if (!is_positive(blend_time)) {
+        _custom_blend = _desired_enabled ? 1.0f : 0.0f;
+        return _custom_blend;
+    }
+
+    const float delta = constrain_float(dt_s / blend_time, 0.0f, 1.0f);
+    if (_desired_enabled) {
+        _custom_blend = constrain_float(_custom_blend + delta, 0.0f, 1.0f);
+    } else {
+        _custom_blend = constrain_float(_custom_blend - delta, 0.0f, 1.0f);
+    }
+    return _custom_blend;
 }
 
 float AC_CustomControl_ADRC::get_output_limit_rp() const

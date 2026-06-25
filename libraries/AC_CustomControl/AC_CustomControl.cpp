@@ -107,50 +107,74 @@ void AC_CustomControl::motor_set(const Vector3f& rpy) {
     const bool roll_valid = isfinite(rpy.x);
     const bool pitch_valid = isfinite(rpy.y);
     const bool yaw_valid = isfinite(rpy.z);
+    const bool suppress_integrators = (_backend != nullptr) && _backend->suppress_main_rate_integrators();
 
     if ((_custom_controller_mask & uint8_t(CustomControlOption::ROLL)) && roll_valid) {
-        motors->set_roll(constrain_float(rpy.x, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX));
-        _att_control->get_rate_roll_pid().set_integrator(0.0f);
+        const float roll_out = constrain_float(rpy.x, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
+        motors->set_roll(roll_out);
+        _last_applied_motor_out.x = roll_out;
+        if (suppress_integrators) {
+            _att_control->get_rate_roll_pid().set_integrator(0.0f);
+        }
     }
     if ((_custom_controller_mask & uint8_t(CustomControlOption::PITCH)) && pitch_valid) {
-        motors->set_pitch(constrain_float(rpy.y, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX));
-        _att_control->get_rate_pitch_pid().set_integrator(0.0f);
+        const float pitch_out = constrain_float(rpy.y, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
+        motors->set_pitch(pitch_out);
+        _last_applied_motor_out.y = pitch_out;
+        if (suppress_integrators) {
+            _att_control->get_rate_pitch_pid().set_integrator(0.0f);
+        }
     }
     if ((_custom_controller_mask & uint8_t(CustomControlOption::YAW)) && yaw_valid) {
-        motors->set_yaw(constrain_float(rpy.z, -AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX));
-        _att_control->get_rate_yaw_pid().set_integrator(0.0f);
+        const float yaw_out = constrain_float(rpy.z, -AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX);
+        motors->set_yaw(yaw_out);
+        _last_applied_motor_out.z = yaw_out;
+        if (suppress_integrators) {
+            _att_control->get_rate_yaw_pid().set_integrator(0.0f);
+        }
     }
 }
 
 // move main controller's target to current states, reset filters,
-// and move integrator to motor output
-// to allow smooth transition to the primary controller
+// and seed the official rate PID integrator with the most recent custom motor output.
+// This reduces the step when handing control back from custom ADRC to the native controller.
 void AC_CustomControl::reset_main_att_controller(void)
 {
-        if (_att_control == nullptr) {
+    if (_att_control == nullptr) {
         return;
     }
-    
+
     // reset attitude and rate target, if feedforward is enabled
     if (_att_control->get_bf_feedforward()) {
         _att_control->relax_attitude_controllers();
     }
 
-    _att_control->get_rate_roll_pid().reset_filter();
-    _att_control->get_rate_pitch_pid().reset_filter();
-    _att_control->get_rate_yaw_pid().reset_filter();
-    
-    _att_control->get_rate_roll_pid().set_integrator(0.0f);
-    _att_control->get_rate_pitch_pid().set_integrator(0.0f);
-    _att_control->get_rate_yaw_pid().set_integrator(0.0f);
+    if (_custom_controller_mask & uint8_t(CustomControlOption::ROLL)) {
+        _att_control->get_rate_roll_pid().reset_filter();
+        const float roll_i = isfinite(_last_applied_motor_out.x) ?
+            constrain_float(_last_applied_motor_out.x, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) : 0.0f;
+        _att_control->get_rate_roll_pid().set_integrator(roll_i);
+    }
+
+    if (_custom_controller_mask & uint8_t(CustomControlOption::PITCH)) {
+        _att_control->get_rate_pitch_pid().reset_filter();
+        const float pitch_i = isfinite(_last_applied_motor_out.y) ?
+            constrain_float(_last_applied_motor_out.y, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) : 0.0f;
+        _att_control->get_rate_pitch_pid().set_integrator(pitch_i);
+    }
+
+    if (_custom_controller_mask & uint8_t(CustomControlOption::YAW)) {
+        _att_control->get_rate_yaw_pid().reset_filter();
+        const float yaw_i = isfinite(_last_applied_motor_out.z) ?
+            constrain_float(_last_applied_motor_out.z, -AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX) : 0.0f;
+        _att_control->get_rate_yaw_pid().set_integrator(yaw_i);
+    }
 }
 
 void AC_CustomControl::set_custom_controller(bool enabled)
 {
     // double logging switch makes the state change very clear in the log
     log_switch();
-
-    _custom_controller_active = false;
 
     // don't allow accidental main controller reset without active custom controller
     if (_controller_type == CustomControlType::CONT_NONE) {
@@ -175,23 +199,28 @@ void AC_CustomControl::set_custom_controller(bool enabled)
         return;
     }
 
-    // reset main controller
     if (!enabled) {
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Custom controller is OFF");
-        _backend->reset();
-        // don't reset if the empty backend is selected
+
+        // Seed the native rate controller before the backend ramps its override out.
+        // Do not reset the backend here; it still needs its ADRC state to generate the
+        // custom side of the blend until the transition reaches zero.
         if (_controller_type > CustomControlType::CONT_EMPTY) {
             reset_main_att_controller();
         }
+        _backend->set_enabled(false);
+        _custom_controller_active = false;
+        log_switch();
+        return;
     }
 
     if (enabled && _controller_type > CustomControlType::CONT_NONE) {
-        // reset custom controller filter, integrator etc.
+        // reset custom controller filter, integrator etc. and start a native->custom handover blend
         _backend->reset();
+        _backend->set_enabled(true);
+        _custom_controller_active = true;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Custom controller is ON");
     }
-
-    _custom_controller_active = enabled;
 
     // log successful switch
     log_switch();
@@ -199,7 +228,10 @@ void AC_CustomControl::set_custom_controller(bool enabled)
 
 // check that RC switch is on, backend is not changed mid flight and controller type is selected
 bool AC_CustomControl::is_safe_to_run(void) const {
-    if (_custom_controller_active && (_controller_type > CustomControlType::CONT_NONE)
+    const bool active_or_transitioning = _custom_controller_active ||
+                                         ((_backend != nullptr) && _backend->is_transition_active());
+
+    if (active_or_transitioning && (_controller_type > CustomControlType::CONT_NONE)
         && (_controller_type <= CUSTOMCONTROL_MAX_TYPES) && _backend != nullptr && _att_control != nullptr && get_motors() != nullptr)
     {
         return true;

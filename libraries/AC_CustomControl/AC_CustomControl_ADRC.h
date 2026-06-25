@@ -13,6 +13,9 @@ public:
 
     Vector3f update(void) override;
     void reset(void) override;
+    void set_enabled(bool enabled) override;
+    bool is_transition_active() const override;
+    bool suppress_main_rate_integrators() const override;
     void set_notch_sample_rate(float sample_rate) override;
 
     // user settable parameters
@@ -38,6 +41,16 @@ protected:
 
         // Latest gyro measurement, body frame, rad/s.
         Vector3f gyro_latest_radps;
+
+        // Native official rate-controller output calculated before customcontrol overrides it.
+        // Used for bumpless blending and for the first SMAX reference when custom control is engaged in flight.
+        Vector3f native_output_rpy;
+
+        // Current custom blend factor: 0 means pure official/native output, 1 means full ADRC output.
+        float custom_blend;
+
+        // Heli leaky-I equivalent amount from AC_AttitudeControl_Heli. ADRC maps this to z2/z3 slow-state leak.
+        float leaky_i_leak_rate;
 
         // Rate error for the custom rate controller, body frame, rad/s.
         // rate_error_body_radps = rate_target_body_radps - gyro_latest_radps.
@@ -101,6 +114,8 @@ protected:
 
     bool option_enabled(uint8_t option) const;
     bool piro_comp_enabled() const;
+    float get_switch_blend_time() const;
+    float update_custom_blend(float dt_s);
     float get_output_limit_rp() const;
     float get_output_limit_yaw() const;
     float get_spool_output_scale() const;
@@ -128,6 +143,7 @@ protected:
     AP_Float _spool_output_scale;
     AP_Int8  _options;
     AP_Int8  _piro_comp_enabled;
+    AP_Float _switch_blend_time;
 
     // General user parameters passed through to the custom rate-controller body.
     // They are not consumed by the interface layer; use them inside run_user_controller().
@@ -141,6 +157,8 @@ protected:
     AC_ADRC::UpdateDebug _pitch_debug;
     AC_ADRC::UpdateDebug _yaw_debug;
 
+    float _custom_blend;
+    bool _desired_enabled;
     bool _spool_inhibit_reset_done;
     bool _controller_has_run;
 };

@@ -22,7 +22,8 @@ const AP_Param::GroupInfo AC_ADRC::var_info[] = {
 
     // @Param: B0
     // @DisplayName: ADRC control input gain
-    // @Description: Plant input gain used by the ADRC observer. Must not be zero. The constructor sets a roll/pitch/yaw specific default before parameters are loaded.
+    // @Description: Plant input gain used by the ADRC observer. Must be positive; do not use a negative B0 to fix servo direction. The constructor sets a roll/pitch/yaw specific default before parameters are loaded.
+    // @Range: 0.0001 10000
     // @User: Advanced
     AP_GROUPINFO("B0", 3, AC_ADRC, _b0, 10.0f),
 
@@ -135,13 +136,23 @@ bool AC_ADRC::update_all(float target,
                          bool motor_limited,
                          float output_limit,
                          float output_scale,
+                         float native_output,
+                         float custom_blend,
+                         float external_leak_fraction,
                          float& output,
                          UpdateDebug* debug)
 {
     output = NAN;
     reset_debug(debug);
 
-    if (!isfinite(target) || !isfinite(measurement) || !validate_params(output_limit, output_scale)) {
+    if (!isfinite(target) || !isfinite(measurement) || !validate_params(output_limit, output_scale) ||
+        !isfinite(custom_blend) || (custom_blend < 0.0f) || (custom_blend > 1.0f) ||
+        !isfinite(external_leak_fraction) || (external_leak_fraction < 0.0f)) {
+        return false;
+    }
+
+    const float blend = constrain_float(custom_blend, 0.0f, 1.0f);
+    if ((blend < 1.0f) && !isfinite(native_output)) {
         return false;
     }
 
@@ -156,6 +167,14 @@ bool AC_ADRC::update_all(float target,
     const float b0 = _b0.get();
     const float delta = _delta.get();
     const int8_t order = int8_t(_order.get());
+
+    const float external_leak = constrain_float(external_leak_fraction, 0.0f, 1.0f);
+    const bool external_leak_active = external_leak > 0.0f;
+    if (external_leak_active) {
+        // Mirrors the Heli AC_HELI_PID leaky-I mode. Apply before computing this loop's
+        // output so the slow-state contribution is reduced immediately, like the native PID I-term.
+        leak_slow_states(external_leak);
+    }
 
     const float target_filtered = apply_lpf(target, _fltt_hz.get(), _target_lpf_state, _target_lpf_initialised);
     const float measurement_notched = apply_notch(measurement);
@@ -214,9 +233,21 @@ bool AC_ADRC::update_all(float target,
     const float local_limit_param = _limit.get();
     const float local_limit = is_positive(local_limit_param) ? MIN(local_limit_param, final_limit) : final_limit;
 
-    // Apply ADRC local/final output limit first, then apply the same spool scaling that will be sent to motors.
-    float applied_output = constrain_float(raw_output, -local_limit, local_limit) * constrain_float(output_scale, 0.0f, 1.0f);
+    // First compute the custom side of the output chain: ADRC local/final limiting and spool scaling.
+    float custom_output = constrain_float(raw_output, -local_limit, local_limit) * constrain_float(output_scale, 0.0f, 1.0f);
+    custom_output = constrain_float(custom_output, -final_limit, final_limit);
+
+    const float native_for_blend = isfinite(native_output) ? constrain_float(native_output, -final_limit, final_limit) : custom_output;
+
+    // Blend from/to the native Heli rate-controller output during switching.  The ESO is updated
+    // with this blended command because it is the actual value returned to AP_Motors this cycle.
+    float applied_output = native_for_blend * (1.0f - blend) + custom_output * blend;
     applied_output = constrain_float(applied_output, -final_limit, final_limit);
+
+    if (!_last_output_valid && isfinite(native_output)) {
+        _last_output = native_for_blend;
+        _last_output_valid = true;
+    }
 
     bool slew_limited = false;
     const float smax = _smax.get();
@@ -231,8 +262,9 @@ bool AC_ADRC::update_all(float target,
     _last_output = applied_output;
     _last_output_valid = true;
 
-    const bool output_limited = fabsf(applied_output - raw_output) > 1.0e-6f;
-    const bool antiwindup_active = motor_limited || output_limited || slew_limited;
+    const bool output_limited = (fabsf(custom_output - raw_output) > 1.0e-6f) ||
+                                (fabsf(applied_output - custom_output) > 1.0e-6f);
+    const bool antiwindup_active = motor_limited || output_limited || slew_limited || (blend < 0.999f);
 
     // State estimation.  The applied_output used here is exactly the output that the backend returns
     // to AP_Motors, so the ESO control input no longer disagrees with final limiting/scaling/slew.
@@ -263,12 +295,17 @@ bool AC_ADRC::update_all(float target,
         const float fe = fal(e, 0.5f, delta);
         const float fe1 = fal(e, 0.25f, delta);
         _z1 = _z1 + _dt * (_z2 - beta1 * e);
+        const float z2_update = _z3 - beta2 * fe + b0 * applied_output;
+        const float z3_update = -beta3 * fe1;
         if (antiwindup_active) {
-            _z2 *= leak_scale;
-            _z3 *= leak_scale;
+            // Keep the known applied actuator input in the second-order ESO even while
+            // limiting/blending/slew is active, then leak the slow states. This avoids
+            // dropping the actual motor command from the observer model during handover.
+            _z2 = (_z2 + _dt * z2_update) * leak_scale;
+            _z3 = (_z3 + _dt * z3_update) * leak_scale;
         } else {
-            _z2 = _z2 + _dt * (_z3 - beta2 * fe + b0 * applied_output);
-            _z3 = _z3 + _dt * (-beta3 * fe1);
+            _z2 = _z2 + _dt * z2_update;
+            _z3 = _z3 + _dt * z3_update;
         }
         break;
     }
@@ -278,20 +315,20 @@ bool AC_ADRC::update_all(float target,
         reset_eso(measurement);
         output = NAN;
         fill_debug(debug, target_filtered, measurement_filtered, adrc_output, ff_output, raw_output, NAN,
-                   motor_limited, output_limited, slew_limited, antiwindup_active, false);
+                   native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, external_leak_active, false);
         return false;
     }
 
     output = applied_output;
     fill_debug(debug, target_filtered, measurement_filtered, adrc_output, ff_output, raw_output, applied_output,
-               motor_limited, output_limited, slew_limited, antiwindup_active, true);
+               native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, external_leak_active, true);
     return true;
 }
 
 float AC_ADRC::update_all(float target, float measurement, bool motor_limited)
 {
     float output = NAN;
-    if (!update_all(target, measurement, motor_limited, 1.0f, 1.0f, output, nullptr)) {
+    if (!update_all(target, measurement, motor_limited, 1.0f, 1.0f, NAN, 1.0f, 0.0f, output, nullptr)) {
         return NAN;
     }
     return output;
@@ -382,7 +419,7 @@ bool AC_ADRC::validate_params(float output_limit, float output_scale) const
     if (!isfinite(wc) || !is_positive(wc) || !isfinite(wo) || !is_positive(wo)) {
         return false;
     }
-    if (!isfinite(b0) || is_zero(b0) || !isfinite(delta) || !is_positive(delta)) {
+    if (!isfinite(b0) || !is_positive(b0) || !isfinite(delta) || !is_positive(delta)) {
         return false;
     }
     if ((order != 1) && (order != 2)) {
@@ -501,10 +538,13 @@ void AC_ADRC::reset_debug(UpdateDebug* debug) const
     debug->ff_output = NAN;
     debug->raw_output = NAN;
     debug->applied_output = NAN;
+    debug->native_output = NAN;
+    debug->custom_blend = NAN;
     debug->motor_limited = false;
     debug->output_limited = false;
     debug->slew_limited = false;
     debug->antiwindup_active = false;
+    debug->external_leak_active = false;
     debug->valid = false;
 }
 
@@ -515,10 +555,13 @@ void AC_ADRC::fill_debug(UpdateDebug* debug,
                          float ff_output,
                          float raw_output,
                          float applied_output,
+                         float native_output,
+                         float custom_blend,
                          bool motor_limited,
                          bool output_limited,
                          bool slew_limited,
                          bool antiwindup_active,
+                         bool external_leak_active,
                          bool valid) const
 {
     if (debug == nullptr) {
@@ -530,11 +573,21 @@ void AC_ADRC::fill_debug(UpdateDebug* debug,
     debug->ff_output = ff_output;
     debug->raw_output = raw_output;
     debug->applied_output = applied_output;
+    debug->native_output = native_output;
+    debug->custom_blend = custom_blend;
     debug->motor_limited = motor_limited;
     debug->output_limited = output_limited;
     debug->slew_limited = slew_limited;
     debug->antiwindup_active = antiwindup_active;
+    debug->external_leak_active = external_leak_active;
     debug->valid = valid;
+}
+
+void AC_ADRC::leak_slow_states(float leak_fraction)
+{
+    const float leak_scale = 1.0f - constrain_float(leak_fraction, 0.0f, 1.0f);
+    _z2 *= leak_scale;
+    _z3 *= leak_scale;
 }
 
 float AC_ADRC::fal(float e, float alpha, float delta) const

@@ -315,6 +315,7 @@ AC_AttitudeControl_Heli::AC_AttitudeControl_Heli(AP_AHRS_View &ahrs, const AP_Mu
     _flags_heli.leaky_i = true;
     _flags_heli.flybar_passthrough = false;
     _flags_heli.tail_passthrough = false;
+    _custom_rate_controller_native_output.zero();
 #if AP_FILTER_ENABLED
     set_notch_sample_rate(AP::scheduler().get_loop_rate_hz());
 #endif
@@ -428,15 +429,23 @@ void AC_AttitudeControl_Heli::rate_controller_run()
     // call rate controllers and send output to motors object
     // if using a flybar passthrough roll and pitch directly to motors
     if (_flags_heli.flybar_passthrough) {
-        _motors.set_roll(_passthrough_roll / 4500.0f);
-        _motors.set_pitch(_passthrough_pitch / 4500.0f);
+        const float roll_out = _passthrough_roll / 4500.0f;
+        const float pitch_out = _passthrough_pitch / 4500.0f;
+        _motors.set_roll(roll_out);
+        _motors.set_pitch(pitch_out);
+        _custom_rate_controller_native_output.x = roll_out;
+        _custom_rate_controller_native_output.y = pitch_out;
     } else {
         rate_bf_to_motor_roll_pitch(_rate_gyro, _ang_vel_body.x, _ang_vel_body.y);
     }
     if (_flags_heli.tail_passthrough) {
-        _motors.set_yaw(_passthrough_yaw / 4500.0f);
+        const float yaw_out = _passthrough_yaw / 4500.0f;
+        _motors.set_yaw(yaw_out);
+        _custom_rate_controller_native_output.z = yaw_out;
     } else {
-        _motors.set_yaw(rate_target_to_motor_yaw(_rate_gyro.z, _ang_vel_body.z));
+        const float yaw_out = rate_target_to_motor_yaw(_rate_gyro.z, _ang_vel_body.z);
+        _motors.set_yaw(yaw_out);
+        _custom_rate_controller_native_output.z = yaw_out;
     }
 
     _sysid_ang_vel_body.zero();
@@ -451,6 +460,11 @@ void AC_AttitudeControl_Heli::rate_controller_run()
 bool AC_AttitudeControl_Heli::custom_rate_controller_low_authority()
 {
     return !((AP_MotorsHeli&)_motors).rotor_runup_complete();
+}
+
+float AC_AttitudeControl_Heli::custom_rate_controller_rate_leak_rate() const
+{
+    return _flags_heli.leaky_i ? AC_ATTITUDE_HELI_RATE_INTEGRATOR_LEAK_RATE : 0.0f;
 }
 
 // Update Alt_Hold angle maximum动态计算并平滑更新定高模式下的最大允许倾斜角
@@ -499,6 +513,8 @@ void AC_AttitudeControl_Heli::rate_bf_to_motor_roll_pitch(const Vector3f &rate_r
     // output to motors
     _motors.set_roll(roll_out);
     _motors.set_pitch(pitch_out);
+    _custom_rate_controller_native_output.x = roll_out;
+    _custom_rate_controller_native_output.y = pitch_out;
 
     // Piro-Comp, or Pirouette Compensation is a pre-compensation calculation, which basically rotates the Roll and Pitch Rate I-terms as the
     // helicopter rotates in yaw.  Much of the built-up I-term is needed to tip the disk into the incoming wind.  Fast yawing can create an instability

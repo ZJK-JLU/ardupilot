@@ -326,6 +326,16 @@ public:
     // is low. The default is false for non-heli vehicles.
     virtual bool custom_rate_controller_low_authority() { return false; }
 
+    // Custom rate-controller hook returning the native rate-controller output that was
+    // most recently written to AP_Motors before a custom backend overrides it.  This
+    // lets custom backends blend from/to the official controller without a step change.
+    virtual Vector3f custom_rate_controller_native_output() const { return Vector3f(NAN, NAN, NAN); }
+
+    // Custom rate-controller hook returning the official rate-controller slow-state leak
+    // amount for this loop.  Heli maps this to AC_ATTITUDE_HELI_RATE_INTEGRATOR_LEAK_RATE
+    // when its leaky_i flag is active; other vehicles default to zero.
+    virtual float custom_rate_controller_rate_leak_rate() const { return 0.0f; }
+
     // return the angular velocity of the target (setpoint) attitude rad/s
     const Vector3f& get_rate_ef_targets() const { return _euler_rate_target; }
 

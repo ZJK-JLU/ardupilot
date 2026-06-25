@@ -17,10 +17,13 @@ public:
         float ff_output;
         float raw_output;
         float applied_output;
+        float native_output;
+        float custom_blend;
         bool motor_limited;
         bool output_limited;
         bool slew_limited;
         bool antiwindup_active;
+        bool external_leak_active;
         bool valid;
     };
 
@@ -35,6 +38,9 @@ public:
                     bool motor_limited,
                     float output_limit,
                     float output_scale,
+                    float native_output,
+                    float custom_blend,
+                    float external_leak_fraction,
                     float& output,
                     UpdateDebug* debug = nullptr);
 
@@ -78,6 +84,7 @@ protected:
     float apply_lpf(float input, float cutoff_hz, float& state, bool& initialised) const;
     float apply_notch(float input);
     void reset_runtime_state(float target, float measurement);
+    void leak_slow_states(float leak_fraction);
     void reset_debug(UpdateDebug* debug) const;
     void fill_debug(UpdateDebug* debug,
                     float target_filtered,
@@ -86,10 +93,13 @@ protected:
                     float ff_output,
                     float raw_output,
                     float applied_output,
+                    float native_output,
+                    float custom_blend,
                     bool motor_limited,
                     bool output_limited,
                     bool slew_limited,
                     bool antiwindup_active,
+                    bool external_leak_active,
                     bool valid) const;
 
     struct ap_adrc_flags {
