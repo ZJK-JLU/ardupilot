@@ -5,6 +5,7 @@
 #include "AC_CustomControl_ADRC.h"
 
 #include <GCS_MAVLink/GCS.h>
+#include <math.h>
 
 // table of user settable parameters
 const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
@@ -38,21 +39,91 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
 
     // @Param: USR1
     // @DisplayName: Custom rate-loop user parameter 1
-    // @Description: General custom-controller parameter. The interface layer does not consume this value; use it inside run_user_controller().
+    // @Description: General custom-controller parameter preserved for user extensions. The ported ADRC rate body does not consume this value.
     // @User: Advanced
     AP_GROUPINFO("USR1", 5, AC_CustomControl_ADRC, _user_param1, 0.0f),
 
     // @Param: USR2
     // @DisplayName: Custom rate-loop user parameter 2
-    // @Description: General custom-controller parameter. The interface layer does not consume this value; use it inside run_user_controller().
+    // @Description: General custom-controller parameter preserved for user extensions. The ported ADRC rate body does not consume this value.
     // @User: Advanced
     AP_GROUPINFO("USR2", 6, AC_CustomControl_ADRC, _user_param2, 0.0f),
 
     // @Param: USR3
     // @DisplayName: Custom rate-loop user parameter 3
-    // @Description: General custom-controller parameter. The interface layer does not consume this value; use it inside run_user_controller().
+    // @Description: General custom-controller parameter preserved for user extensions. The ported ADRC rate body does not consume this value.
     // @User: Advanced
     AP_GROUPINFO("USR3", 7, AC_CustomControl_ADRC, _user_param3, 0.0f),
+
+    // @Param: TD_R0
+    // @DisplayName: ADRC rate-loop TD r0
+    // @Description: Tracking differentiator speed parameter used on roll/pitch rate error before NLSEF. Ported from ADRC_ATT TD_R0.
+    // @Range: 0.1 1000
+    // @User: Advanced
+    AP_GROUPINFO("TD_R0", 8, AC_CustomControl_ADRC, _adrc_td_r0, 100.0f),
+
+    // @Param: LESO_W
+    // @DisplayName: ADRC rate-loop LESO bandwidth
+    // @Description: Linear extended state observer bandwidth for roll/pitch. beta1=2*w and beta2=w*w. Ported from ADRC_ATT LESO_W.
+    // @Range: 0.1 200
+    // @User: Advanced
+    AP_GROUPINFO("LESO_W", 9, AC_CustomControl_ADRC, _adrc_leso_w, 25.0f),
+
+    // @Param: B0
+    // @DisplayName: ADRC rate-loop control gain estimate
+    // @Description: Nominal control effectiveness b0 used by LESO and disturbance compensation. Ported from ADRC_ATT B0; tune for the fuel-helicopter roll/pitch plant.
+    // @Range: 0.1 5000
+    // @User: Advanced
+    AP_GROUPINFO("B0", 10, AC_CustomControl_ADRC, _adrc_b0, 400.0f),
+
+    // @Param: NL_R1
+    // @DisplayName: ADRC rate-loop NLSEF r1
+    // @Description: NLSEF fhan speed parameter for roll/pitch rate control. Ported from ADRC_ATT NLSEF_R1.
+    // @Range: 0.1 1000
+    // @User: Advanced
+    AP_GROUPINFO("NL_R1", 11, AC_CustomControl_ADRC, _adrc_nlsef_r1, 100.0f),
+
+    // @Param: NL_H1F
+    // @DisplayName: ADRC rate-loop NLSEF h1 factor
+    // @Description: NLSEF h1 is this factor multiplied by controller dt. Ported from ADRC_ATT NLSEF_H1F.
+    // @Range: 0.1 100
+    // @User: Advanced
+    AP_GROUPINFO("NL_H1F", 12, AC_CustomControl_ADRC, _adrc_nlsef_h1f, 5.0f),
+
+    // @Param: NL_C
+    // @DisplayName: ADRC rate-loop NLSEF c
+    // @Description: NLSEF derivative-state multiplier c. Ported from ADRC_ATT NLSEF_C.
+    // @Range: 0 100
+    // @User: Advanced
+    AP_GROUPINFO("NL_C", 13, AC_CustomControl_ADRC, _adrc_nlsef_c, 1.0f),
+
+    // @Param: NL_KI
+    // @DisplayName: ADRC rate-loop integral gain
+    // @Description: Integral gain added after NLSEF, limited to +/-0.1 internally as in the reference path. Ported from ADRC_ATT NLSEF_KI.
+    // @Range: 0 10
+    // @User: Advanced
+    AP_GROUPINFO("NL_KI", 14, AC_CustomControl_ADRC, _adrc_nlsef_ki, 0.0f),
+
+    // @Param: GAMMA
+    // @DisplayName: ADRC rate-loop disturbance compensation gain
+    // @Description: Multiplier applied to LESO z2/b0 disturbance compensation. Ported from ADRC_ATT GAMMA.
+    // @Range: 0 2
+    // @User: Advanced
+    AP_GROUPINFO("GAMMA", 15, AC_CustomControl_ADRC, _adrc_gamma, 1.0f),
+
+    // @Param: U_MAX
+    // @DisplayName: ADRC internal output limit
+    // @Description: Internal ADRC roll/pitch output bound before final AC_CustomControl output limiting. Default 0.5 matches the supplied reference constrain range.
+    // @Range: 0 1
+    // @User: Advanced
+    AP_GROUPINFO("U_MAX", 16, AC_CustomControl_ADRC, _adrc_u_max, 0.5f),
+
+    // @Param: DLY
+    // @DisplayName: ADRC LESO control delay samples
+    // @Description: Number of controller samples in the delayed control input used by LESO. Default 3 matches the supplied non-HIL reference delay block.
+    // @Range: 1 8
+    // @User: Advanced
+    AP_GROUPINFO("DLY", 17, AC_CustomControl_ADRC, _adrc_delay_samples, 3),
 
     AP_GROUPEND
 };
@@ -60,6 +131,7 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
 // initialize in the constructor
 AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, AP_Motors* motors, float dt) :
     AC_CustomControl_Backend(frontend, ahrs, att_control, motors, dt),
+    _rate_controller(),
     _last_raw_out(0.0f, 0.0f, 0.0f),
     _last_limited_out(0.0f, 0.0f, 0.0f),
     _spool_inhibit_reset_done(false),
@@ -190,57 +262,41 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
     // -------------------------------------------------------------------------
     // Custom rate-control body starts here.
     //
-    // Existing Simulink signature kept for compatibility, but the signal meaning
-    // is now rate-loop-only:
-    //   arg_rate_target : official native angle-loop output, body frame, rad/s
-    //   arg_rate_error  : arg_rate_target - gyro_latest, body frame, rad/s
-    //   arg_rate_meas   : gyro_latest, body frame, rad/s
-    //   arg_out         : normalized AP_Motors roll/pitch/yaw command
+    // Ported reference signal mapping:
+    //   rate_error_body_radps : target body rate from native angle loop - measured gyro
+    //   gyro_latest_radps     : LESO measurement y
+    //   normalized_rpy        : normalized AP_Motors roll/pitch command
     //
-    // A complete fuel-heli rate controller should also consume at least:
-    //   input.dt_s
-    //   input.motor_roll_limited / input.motor_pitch_limited / input.motor_yaw_limited
-    //   input.spool_state / input.allow_controller_update / input.allow_motor_output
-    //   input.piro_cos / input.piro_sin for roll-pitch slow-state rotation
-    //   _user_param1 / _user_param2 / _user_param3 as controller parameters
+    // The supplied reference ADRC body implements roll/pitch ADRC and calls an
+    // external yaw PID.  Because that yaw PID source was not included, yaw is left
+    // as NAN so AC_CustomControl::motor_set() keeps the native yaw controller output.
     // -------------------------------------------------------------------------
 
-    float arg_rate_target[3] {
-        input.rate_target_body_radps.x,
-        input.rate_target_body_radps.y,
-        input.rate_target_body_radps.z
-    };
+    const AC_CustomControl_ADRC_Rate::Params params = get_rate_controller_params();
+    _rate_controller.piro_compensate(input.piro_cos, input.piro_sin);
+    output.normalized_rpy = _rate_controller.update(input.rate_error_body_radps,
+                                                    input.gyro_latest_radps,
+                                                    input.dt_s,
+                                                    params,
+                                                    input.motor_roll_limited,
+                                                    input.motor_pitch_limited);
 
-    float arg_rate_error[3] {
-        input.rate_error_body_radps.x,
-        input.rate_error_body_radps.y,
-        input.rate_error_body_radps.z
-    };
-
-    float arg_rate_meas[3] {
-        input.gyro_latest_radps.x,
-        input.gyro_latest_radps.y,
-        input.gyro_latest_radps.z
-    };
-
-    float arg_out[3] {};
-
-    simulink_controller.step(arg_rate_target, arg_rate_error, arg_rate_meas, arg_out);
-
-    output.normalized_rpy = Vector3f(arg_out[0], arg_out[1], arg_out[2]);
     _last_raw_out = output.normalized_rpy;
     _controller_has_run = true;
 
-    // Custom rate-control body ends here.
-    return true;
+    return isfinite(output.normalized_rpy.x) || isfinite(output.normalized_rpy.y) || isfinite(output.normalized_rpy.z);
 }
 
 Vector3f AC_CustomControl_ADRC::finalize_output(const ControllerInput& input, const ControllerOutput& output)
 {
     Vector3f motor_out = output.normalized_rpy;
 
-    if (!isfinite(motor_out.x) || !isfinite(motor_out.y) || !isfinite(motor_out.z)) {
-        reset_controller_state();
+    bool roll_valid = isfinite(motor_out.x);
+    bool pitch_valid = isfinite(motor_out.y);
+    bool yaw_valid = isfinite(motor_out.z);
+
+    if (!roll_valid && !pitch_valid && !yaw_valid) {
+        _last_limited_out = zero_output();
         return no_override_output();
     }
 
@@ -250,17 +306,42 @@ Vector3f AC_CustomControl_ADRC::finalize_output(const ControllerInput& input, co
     }
 
     if (input.spool_transition) {
-        motor_out *= get_spool_output_scale();
+        const float spool_scale = get_spool_output_scale();
+        if (roll_valid) {
+            motor_out.x *= spool_scale;
+        }
+        if (pitch_valid) {
+            motor_out.y *= spool_scale;
+        }
+        if (yaw_valid) {
+            motor_out.z *= spool_scale;
+        }
     }
 
     const float rp_limit = get_output_limit_rp();
     const float yaw_limit = get_output_limit_yaw();
 
-    motor_out.x = constrain_float(motor_out.x, -rp_limit, rp_limit);
-    motor_out.y = constrain_float(motor_out.y, -rp_limit, rp_limit);
-    motor_out.z = constrain_float(motor_out.z, -yaw_limit, yaw_limit);
+    if (roll_valid) {
+        motor_out.x = constrain_float(motor_out.x, -rp_limit, rp_limit);
+    } else {
+        motor_out.x = NAN;
+    }
 
-    _last_limited_out = motor_out;
+    if (pitch_valid) {
+        motor_out.y = constrain_float(motor_out.y, -rp_limit, rp_limit);
+    } else {
+        motor_out.y = NAN;
+    }
+
+    if (yaw_valid) {
+        motor_out.z = constrain_float(motor_out.z, -yaw_limit, yaw_limit);
+    } else {
+        motor_out.z = NAN;
+    }
+
+    _last_limited_out = Vector3f(roll_valid ? motor_out.x : 0.0f,
+                                 pitch_valid ? motor_out.y : 0.0f,
+                                 yaw_valid ? motor_out.z : 0.0f);
     return motor_out;
 }
 
@@ -282,9 +363,15 @@ void AC_CustomControl_ADRC::reset(void)
 
 void AC_CustomControl_ADRC::reset_controller_state()
 {
-    // If your generated controller exposes a lighter reset_states() entry point, replace initialize()
-    // here.  Keep parameter initialization separate from state reset if your generated code supports it.
-    simulink_controller.initialize();
+    float dt_s = _dt;
+    if (!is_positive(dt_s) && (_att_control != nullptr)) {
+        dt_s = _att_control->get_dt();
+    }
+    if (!is_positive(dt_s)) {
+        dt_s = 0.0025f;
+    }
+
+    _rate_controller.reset(dt_s, get_rate_controller_params());
     _last_raw_out.zero();
     _last_limited_out.zero();
     _controller_has_run = false;
@@ -341,6 +428,31 @@ bool AC_CustomControl_ADRC::is_spool_state_inhibited(const ControllerInput& inpu
     }
 
     return false;
+}
+
+AC_CustomControl_ADRC_Rate::Params AC_CustomControl_ADRC::get_rate_controller_params() const
+{
+    int16_t delay_samples = _adrc_delay_samples.get();
+    if (delay_samples < 1) {
+        delay_samples = 1;
+    } else if (delay_samples > 8) {
+        delay_samples = 8;
+    }
+
+    AC_CustomControl_ADRC_Rate::Params params {
+        _adrc_td_r0.get(),
+        _adrc_leso_w.get(),
+        _adrc_b0.get(),
+        _adrc_nlsef_r1.get(),
+        _adrc_nlsef_h1f.get(),
+        _adrc_nlsef_c.get(),
+        _adrc_nlsef_ki.get(),
+        _adrc_gamma.get(),
+        _adrc_u_max.get(),
+        static_cast<uint8_t>(delay_samples)
+    };
+
+    return params;
 }
 
 #endif  // AP_CUSTOMCONTROL_ADRC_ENABLED

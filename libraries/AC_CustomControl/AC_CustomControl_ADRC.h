@@ -4,9 +4,8 @@
 
 #if AP_CUSTOMCONTROL_ADRC_ENABLED
 
-#include <AC_ADRC/arduAttCont.h>
-
 #include "AC_CustomControl_Backend.h"
+#include "AC_CustomControl_ADRC_Rate.h"
 
 class AC_CustomControl_ADRC : public AC_CustomControl_Backend {
 public:
@@ -90,10 +89,11 @@ protected:
     float get_output_limit_yaw() const;
     float get_spool_output_scale() const;
     bool is_spool_state_inhibited(const ControllerInput& input) const;
+    AC_CustomControl_ADRC_Rate::Params get_rate_controller_params() const;
 
-    // Simulink generated controller object. The default user-control body below calls this object,
-    // but all upstream/downstream interface and safety logic is outside the Simulink model.
-    arduAttCont simulink_controller;
+    // ADRC rate-loop body ported from the supplied reference code.  The reference ADRC body controls
+    // roll/pitch rate; yaw is returned as NAN so the native yaw rate controller remains in charge.
+    AC_CustomControl_ADRC_Rate _rate_controller;
 
     enum ADRCOption : uint8_t {
         // Keep bit 2 for compatibility with the earlier interface. Bits 0 and 1 are intentionally
@@ -108,11 +108,23 @@ protected:
     AP_Float _spool_output_scale;
     AP_Int8  _options;
 
-    // General user parameters passed through to the custom rate-controller body.
-    // They are not consumed by the interface layer; use them inside run_user_controller().
+    // General user parameters preserved from the original interface.  They are not consumed by the
+    // ported ADRC rate body; keep them available for user extensions without changing the backend ABI.
     AP_Float _user_param1;
     AP_Float _user_param2;
     AP_Float _user_param3;
+
+    // ADRC rate-loop parameters mapped from the supplied adrc_att.c reference.
+    AP_Float _adrc_td_r0;
+    AP_Float _adrc_leso_w;
+    AP_Float _adrc_b0;
+    AP_Float _adrc_nlsef_r1;
+    AP_Float _adrc_nlsef_h1f;
+    AP_Float _adrc_nlsef_c;
+    AP_Float _adrc_nlsef_ki;
+    AP_Float _adrc_gamma;
+    AP_Float _adrc_u_max;
+    AP_Int8  _adrc_delay_samples;
 
     Vector3f _last_raw_out;
     Vector3f _last_limited_out;
