@@ -4,6 +4,8 @@
 
 #include "AC_CustomControl_ADRC.h"
 
+#include <AP_HAL/AP_HAL.h>
+#include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
 
 // table of user settable parameters
@@ -31,8 +33,8 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
 
     // @Param: OPTIONS
     // @DisplayName: Custom rate-loop controller options
-    // @Description: Bit 2 allows controller update during spooling; output is still scaled by CC3_SPOOL_SCL. Bits 0 and 1 are unused in the rate-loop-only backend because the native angle loop handles feed-forward and large thrust-vector yaw priority before the rate target is exposed.
-    // @Bitmask: 2:RunWhileSpooling
+    // @Description: Bit 2 allows controller update/output during spooling; output is scaled by CC3_SPOOL_SCL. Bit 4 enables high-rate ADRC diagnostic logging. Bits 0 and 1 are unused in the rate-loop-only backend because the native angle loop handles feed-forward and large thrust-vector yaw priority before the rate target is exposed.
+    // @Bitmask: 2:RunWhileSpooling,4:LogADRC
     // @User: Advanced
     AP_GROUPINFO("OPTIONS", 4, AC_CustomControl_ADRC, _options, 0),
 
@@ -75,7 +77,39 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
 
     // @Param: RAT_RLL_LM
-    // @DisplayName: ADRC roll axis control output limit
+    // @DisplayName: ADRC roll axis local output limit
+    // @User: Advanced
+
+    // @Param: RAT_RLL_FF
+    // @DisplayName: ADRC roll axis rate feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_RLL_DFF
+    // @DisplayName: ADRC roll axis target derivative feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_RLL_FLTT
+    // @DisplayName: ADRC roll axis target filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_RLL_FLTG
+    // @DisplayName: ADRC roll axis gyro filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_RLL_NFRQ
+    // @DisplayName: ADRC roll axis gyro notch center frequency
+    // @User: Advanced
+
+    // @Param: RAT_RLL_NBW
+    // @DisplayName: ADRC roll axis gyro notch bandwidth
+    // @User: Advanced
+
+    // @Param: RAT_RLL_SMAX
+    // @DisplayName: ADRC roll axis output slew limit
+    // @User: Advanced
+
+    // @Param: RAT_RLL_AWLK
+    // @DisplayName: ADRC roll axis anti-windup leak
     // @User: Advanced
     AP_SUBGROUPINFO(_rate_roll_adrc, "RAT_RLL_", 8, AC_CustomControl_ADRC, AC_ADRC),
 
@@ -100,7 +134,39 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
 
     // @Param: RAT_PIT_LM
-    // @DisplayName: ADRC pitch axis control output limit
+    // @DisplayName: ADRC pitch axis local output limit
+    // @User: Advanced
+
+    // @Param: RAT_PIT_FF
+    // @DisplayName: ADRC pitch axis rate feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_PIT_DFF
+    // @DisplayName: ADRC pitch axis target derivative feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_PIT_FLTT
+    // @DisplayName: ADRC pitch axis target filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_PIT_FLTG
+    // @DisplayName: ADRC pitch axis gyro filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_PIT_NFRQ
+    // @DisplayName: ADRC pitch axis gyro notch center frequency
+    // @User: Advanced
+
+    // @Param: RAT_PIT_NBW
+    // @DisplayName: ADRC pitch axis gyro notch bandwidth
+    // @User: Advanced
+
+    // @Param: RAT_PIT_SMAX
+    // @DisplayName: ADRC pitch axis output slew limit
+    // @User: Advanced
+
+    // @Param: RAT_PIT_AWLK
+    // @DisplayName: ADRC pitch axis anti-windup leak
     // @User: Advanced
     AP_SUBGROUPINFO(_rate_pitch_adrc, "RAT_PIT_", 9, AC_CustomControl_ADRC, AC_ADRC),
 
@@ -125,9 +191,48 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
 
     // @Param: RAT_YAW_LM
-    // @DisplayName: ADRC yaw axis control output limit
+    // @DisplayName: ADRC yaw axis local output limit
+    // @User: Advanced
+
+    // @Param: RAT_YAW_FF
+    // @DisplayName: ADRC yaw axis rate feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_YAW_DFF
+    // @DisplayName: ADRC yaw axis target derivative feed-forward
+    // @User: Advanced
+
+    // @Param: RAT_YAW_FLTT
+    // @DisplayName: ADRC yaw axis target filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_YAW_FLTG
+    // @DisplayName: ADRC yaw axis gyro filter frequency
+    // @User: Advanced
+
+    // @Param: RAT_YAW_NFRQ
+    // @DisplayName: ADRC yaw axis gyro notch center frequency
+    // @User: Advanced
+
+    // @Param: RAT_YAW_NBW
+    // @DisplayName: ADRC yaw axis gyro notch bandwidth
+    // @User: Advanced
+
+    // @Param: RAT_YAW_SMAX
+    // @DisplayName: ADRC yaw axis output slew limit
+    // @User: Advanced
+
+    // @Param: RAT_YAW_AWLK
+    // @DisplayName: ADRC yaw axis anti-windup leak
     // @User: Advanced
     AP_SUBGROUPINFO(_rate_yaw_adrc, "RAT_YAW_", 10, AC_CustomControl_ADRC, AC_ADRC),
+
+    // @Param: PIRO_COMP
+    // @DisplayName: Custom ADRC piro compensation
+    // @Description: Enables helicopter piro compensation for ADRC roll/pitch slow ESO states. This is independent of the native ATC_PIRO_COMP parameter because the custom backend cannot directly read the private Heli flag from the supplied official attitude-controller interface.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Advanced
+    AP_GROUPINFO("PIRO_COMP", 11, AC_CustomControl_ADRC, _piro_comp_enabled, 0),
 
     AP_GROUPEND
 };
@@ -138,8 +243,11 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
     _rate_roll_adrc(100.0f, dt),
     _rate_pitch_adrc(100.0f, dt),
     _rate_yaw_adrc(10.0f, dt),
-    _last_raw_out(0.0f, 0.0f, 0.0f),
-    _last_limited_out(0.0f, 0.0f, 0.0f),
+    _last_raw_out(NAN, NAN, NAN),
+    _last_limited_out(NAN, NAN, NAN),
+    _roll_debug{},
+    _pitch_debug{},
+    _yaw_debug{},
     _spool_inhibit_reset_done(false),
     _controller_has_run(false)
 {
@@ -151,7 +259,7 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
 }
 
 // update controller
-// return normalized roll, pitch, yaw mixer input
+// return normalized roll, pitch, yaw mixer input. NAN on an axis means "do not override official output".
 Vector3f AC_CustomControl_ADRC::update(void)
 {
     ControllerInput input;
@@ -180,7 +288,9 @@ Vector3f AC_CustomControl_ADRC::update(void)
         return no_override_output();
     }
 
-    return finalize_output(input, output);
+    const Vector3f motor_out = finalize_output(input, output);
+    log_adrc(input, output);
+    return motor_out;
 }
 
 bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
@@ -193,6 +303,13 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
     if (!is_positive(input.dt_s)) {
         return false;
     }
+
+    input.axis_roll_enabled = _frontend.axis_enabled_roll();
+    input.axis_pitch_enabled = _frontend.axis_enabled_pitch();
+    input.axis_yaw_enabled = _frontend.axis_enabled_yaw();
+
+    input.roll_pitch_output_limit = get_output_limit_rp();
+    input.yaw_output_limit = get_output_limit_yaw();
 
     input.spool_state = _motors->get_spool_state();
     input.ground_or_idle = false;
@@ -215,12 +332,17 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
             break;
     }
 
-    input.low_control_authority = _att_control->custom_rate_controller_low_authority();
+    input.output_scale = input.spool_transition ? get_spool_output_scale() : 1.0f;
 
-    input.allow_controller_update = (input.throttle_unlimited && !input.low_control_authority) ||
-                                    (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING));
-    input.allow_motor_output = (input.throttle_unlimited && !input.low_control_authority) ||
-                               (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(get_spool_output_scale()));
+    // The official AC_AttitudeControl_Heli files supplied with this request do not expose a public
+    // rotor_runup_complete() or custom low-authority hook, so the custom backend derives low-authority
+    // from the public AP_Motors spool state only.
+    input.low_control_authority = input.ground_or_idle || input.spool_transition;
+
+    input.allow_controller_update = input.throttle_unlimited ||
+                                    (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
+    input.allow_motor_output = input.throttle_unlimited ||
+                               (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
 
     // Official native angle-loop output.  AC_AttitudeControl / AC_AttitudeControl_Heli has already
     // generated this value from target attitude, thrust-heading error, angle P/sqrt-controller,
@@ -236,15 +358,14 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
         return false;
     }
 
-    // Custom rate-loop error.  This is the main signal your ADRC/INDI/LQR/SMC/MPC rate law should use.
+    // Custom rate-loop error.  This is available for logging and for future custom-rate-law changes.
     input.rate_error_body_radps = input.rate_target_body_radps - input.gyro_latest_radps;
 
     input.motor_roll_limited = _motors->limit.roll;
     input.motor_pitch_limited = _motors->limit.pitch;
     input.motor_yaw_limited = _motors->limit.yaw;
 
-    // Piro-compensation interface for Heli roll/pitch slow states.  The user rate-control body should
-    // rotate any persistent roll/pitch disturbance/integrator/observer state by this yaw increment.
+    // Piro-compensation interface for Heli roll/pitch slow states.
     input.piro_delta_angle_rad = -input.gyro_latest_radps.z * input.dt_s;
     input.piro_cos = cosf(input.piro_delta_angle_rad);
     input.piro_sin = sinf(input.piro_delta_angle_rad);
@@ -263,30 +384,64 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
 // output limiting.
 bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, ControllerOutput& output)
 {
-    if (!input.allow_controller_update) {
-        output.normalized_rpy = no_override_output();
+    output.normalized_rpy = no_override_output();
+
+    if (!input.allow_controller_update || !input.allow_motor_output) {
         return true;
     }
+
+    reset_axis_state_if_disabled(input);
 
     _rate_roll_adrc.set_dt(input.dt_s);
     _rate_pitch_adrc.set_dt(input.dt_s);
     _rate_yaw_adrc.set_dt(input.dt_s);
 
-    // ADRC ESO states are persistent body-frame roll/pitch states.  Rotate them
-    // by the Heli piro-compensation increment before the new rate update.
-    _rate_roll_adrc.rotate_eso_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
+    // Match the official Heli behaviour more closely: piro compensation is no longer unconditional.
+    // It is applied only when CC3_PIRO_COMP is enabled and both roll and pitch are actually controlled
+    // by the custom backend.  The ADRC method rotates slow disturbance states only, not the measured-rate state z1.
+    if (piro_comp_enabled() && input.axis_roll_enabled && input.axis_pitch_enabled) {
+        _rate_roll_adrc.rotate_slow_states_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
+    }
 
-    output.normalized_rpy.x = _rate_roll_adrc.update_all(input.rate_target_body_radps.x,
-                                                         input.gyro_latest_radps.x,
-                                                         input.motor_roll_limited);
-    output.normalized_rpy.y = _rate_pitch_adrc.update_all(input.rate_target_body_radps.y,
-                                                          input.gyro_latest_radps.y,
-                                                          input.motor_pitch_limited);
-    output.normalized_rpy.z = _rate_yaw_adrc.update_all(input.rate_target_body_radps.z,
-                                                        input.gyro_latest_radps.z,
-                                                        input.motor_yaw_limited);
+    bool valid = true;
 
-    _last_raw_out = output.normalized_rpy;
+    if (input.axis_roll_enabled) {
+        valid &= _rate_roll_adrc.update_all(input.rate_target_body_radps.x,
+                                            input.gyro_latest_radps.x,
+                                            input.motor_roll_limited,
+                                            input.roll_pitch_output_limit,
+                                            input.output_scale,
+                                            output.normalized_rpy.x,
+                                            &_roll_debug);
+    }
+
+    if (input.axis_pitch_enabled) {
+        valid &= _rate_pitch_adrc.update_all(input.rate_target_body_radps.y,
+                                             input.gyro_latest_radps.y,
+                                             input.motor_pitch_limited,
+                                             input.roll_pitch_output_limit,
+                                             input.output_scale,
+                                             output.normalized_rpy.y,
+                                             &_pitch_debug);
+    }
+
+    if (input.axis_yaw_enabled) {
+        valid &= _rate_yaw_adrc.update_all(input.rate_target_body_radps.z,
+                                           input.gyro_latest_radps.z,
+                                           input.motor_yaw_limited,
+                                           input.yaw_output_limit,
+                                           input.output_scale,
+                                           output.normalized_rpy.z,
+                                           &_yaw_debug);
+    }
+
+    if (!valid) {
+        return false;
+    }
+
+    _last_raw_out.x = input.axis_roll_enabled ? _roll_debug.raw_output : NAN;
+    _last_raw_out.y = input.axis_pitch_enabled ? _pitch_debug.raw_output : NAN;
+    _last_raw_out.z = input.axis_yaw_enabled ? _yaw_debug.raw_output : NAN;
     _controller_has_run = true;
 
     return true;
@@ -296,26 +451,37 @@ Vector3f AC_CustomControl_ADRC::finalize_output(const ControllerInput& input, co
 {
     Vector3f motor_out = output.normalized_rpy;
 
-    if (!isfinite(motor_out.x) || !isfinite(motor_out.y) || !isfinite(motor_out.z)) {
+    if (!input.allow_motor_output) {
+        _last_limited_out = no_override_output();
+        return no_override_output();
+    }
+
+    // Validate only the axes that are actually enabled. Disabled axes intentionally remain NAN so
+    // AC_CustomControl::motor_set() leaves the official Heli rate controller output untouched.
+    if ((input.axis_roll_enabled && !isfinite(motor_out.x)) ||
+        (input.axis_pitch_enabled && !isfinite(motor_out.y)) ||
+        (input.axis_yaw_enabled && !isfinite(motor_out.z))) {
         reset_controller_state();
         return no_override_output();
     }
 
-    if (!input.allow_motor_output) {
-        _last_limited_out = zero_output();
-        return no_override_output();
+    if (input.axis_roll_enabled) {
+        motor_out.x = constrain_float(motor_out.x, -input.roll_pitch_output_limit, input.roll_pitch_output_limit);
+    } else {
+        motor_out.x = NAN;
     }
 
-    if (input.spool_transition) {
-        motor_out *= get_spool_output_scale();
+    if (input.axis_pitch_enabled) {
+        motor_out.y = constrain_float(motor_out.y, -input.roll_pitch_output_limit, input.roll_pitch_output_limit);
+    } else {
+        motor_out.y = NAN;
     }
 
-    const float rp_limit = get_output_limit_rp();
-    const float yaw_limit = get_output_limit_yaw();
-
-    motor_out.x = constrain_float(motor_out.x, -rp_limit, rp_limit);
-    motor_out.y = constrain_float(motor_out.y, -rp_limit, rp_limit);
-    motor_out.z = constrain_float(motor_out.z, -yaw_limit, yaw_limit);
+    if (input.axis_yaw_enabled) {
+        motor_out.z = constrain_float(motor_out.z, -input.yaw_output_limit, input.yaw_output_limit);
+    } else {
+        motor_out.z = NAN;
+    }
 
     _last_limited_out = motor_out;
     return motor_out;
@@ -337,6 +503,13 @@ void AC_CustomControl_ADRC::reset(void)
     _spool_inhibit_reset_done = false;
 }
 
+void AC_CustomControl_ADRC::set_notch_sample_rate(float sample_rate)
+{
+    _rate_roll_adrc.set_notch_sample_rate(sample_rate);
+    _rate_pitch_adrc.set_notch_sample_rate(sample_rate);
+    _rate_yaw_adrc.set_notch_sample_rate(sample_rate);
+}
+
 void AC_CustomControl_ADRC::reset_controller_state()
 {
     Vector3f gyro_latest(0.0f, 0.0f, 0.0f);
@@ -351,8 +524,11 @@ void AC_CustomControl_ADRC::reset_controller_state()
     _rate_pitch_adrc.reset_filter();
     _rate_yaw_adrc.reset_filter();
 
-    _last_raw_out.zero();
-    _last_limited_out.zero();
+    _last_raw_out = no_override_output();
+    _last_limited_out = no_override_output();
+    _roll_debug = {};
+    _pitch_debug = {};
+    _yaw_debug = {};
     _controller_has_run = false;
 }
 
@@ -364,9 +540,88 @@ void AC_CustomControl_ADRC::reset_for_spool_inhibition()
     }
 }
 
+void AC_CustomControl_ADRC::reset_axis_state_if_disabled(const ControllerInput& input)
+{
+    if (!input.axis_roll_enabled) {
+        _rate_roll_adrc.reset_eso(input.gyro_latest_radps.x);
+        _rate_roll_adrc.reset_filter();
+    }
+    if (!input.axis_pitch_enabled) {
+        _rate_pitch_adrc.reset_eso(input.gyro_latest_radps.y);
+        _rate_pitch_adrc.reset_filter();
+    }
+    if (!input.axis_yaw_enabled) {
+        _rate_yaw_adrc.reset_eso(input.gyro_latest_radps.z);
+        _rate_yaw_adrc.reset_filter();
+    }
+}
+
+void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const ControllerOutput& output) const
+{
+    if (!option_enabled(OPTION_LOG_ADRC) || !_controller_has_run) {
+        return;
+    }
+
+    uint32_t flags = 0;
+    flags |= input.motor_roll_limited ? (1U << 0) : 0U;
+    flags |= input.motor_pitch_limited ? (1U << 1) : 0U;
+    flags |= input.motor_yaw_limited ? (1U << 2) : 0U;
+    flags |= _roll_debug.output_limited ? (1U << 3) : 0U;
+    flags |= _pitch_debug.output_limited ? (1U << 4) : 0U;
+    flags |= _yaw_debug.output_limited ? (1U << 5) : 0U;
+    flags |= _roll_debug.slew_limited ? (1U << 6) : 0U;
+    flags |= _pitch_debug.slew_limited ? (1U << 7) : 0U;
+    flags |= _yaw_debug.slew_limited ? (1U << 8) : 0U;
+    flags |= _roll_debug.antiwindup_active ? (1U << 9) : 0U;
+    flags |= _pitch_debug.antiwindup_active ? (1U << 10) : 0U;
+    flags |= _yaw_debug.antiwindup_active ? (1U << 11) : 0U;
+    flags |= piro_comp_enabled() ? (1U << 12) : 0U;
+    flags |= input.spool_transition ? (1U << 13) : 0U;
+    flags |= input.low_control_authority ? (1U << 14) : 0U;
+    flags |= input.allow_motor_output ? (1U << 15) : 0U;
+
+    AP::logger().Write("CCAR", "TimeUS,TR,TP,TY,GR,GP,GY,RR,RP,RY,OR,OP,OY,Flg", "QffffffffffffI",
+                       AP_HAL::micros64(),
+                       input.rate_target_body_radps.x,
+                       input.rate_target_body_radps.y,
+                       input.rate_target_body_radps.z,
+                       input.gyro_latest_radps.x,
+                       input.gyro_latest_radps.y,
+                       input.gyro_latest_radps.z,
+                       _last_raw_out.x,
+                       _last_raw_out.y,
+                       _last_raw_out.z,
+                       _last_limited_out.x,
+                       _last_limited_out.y,
+                       _last_limited_out.z,
+                       flags);
+
+    AP::logger().Write("CCAS", "TimeUS,Z1R,Z2R,Z3R,Z1P,Z2P,Z3P,Z1Y,Z2Y,Z3Y,FR,FP,FY", "Qffffffffffff",
+                       AP_HAL::micros64(),
+                       _rate_roll_adrc.get_z1(),
+                       _rate_roll_adrc.get_z2(),
+                       _rate_roll_adrc.get_z3(),
+                       _rate_pitch_adrc.get_z1(),
+                       _rate_pitch_adrc.get_z2(),
+                       _rate_pitch_adrc.get_z3(),
+                       _rate_yaw_adrc.get_z1(),
+                       _rate_yaw_adrc.get_z2(),
+                       _rate_yaw_adrc.get_z3(),
+                       _roll_debug.ff_output,
+                       _pitch_debug.ff_output,
+                       _yaw_debug.ff_output);
+
+    (void)output;
+}
+
 bool AC_CustomControl_ADRC::option_enabled(uint8_t option) const
 {
     return (uint8_t(_options.get()) & option) != 0;
+}
+
+bool AC_CustomControl_ADRC::piro_comp_enabled() const
+{
+    return int8_t(_piro_comp_enabled.get()) != 0;
 }
 
 float AC_CustomControl_ADRC::get_output_limit_rp() const
@@ -399,10 +654,6 @@ bool AC_CustomControl_ADRC::is_spool_state_inhibited(const ControllerInput& inpu
     }
 
     if (input.spool_transition && !option_enabled(OPTION_RUN_WHILE_SPOOLING)) {
-        return true;
-    }
-
-    if (input.low_control_authority && !option_enabled(OPTION_RUN_WHILE_SPOOLING)) {
         return true;
     }
 

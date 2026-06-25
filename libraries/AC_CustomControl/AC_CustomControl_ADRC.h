@@ -13,6 +13,7 @@ public:
 
     Vector3f update(void) override;
     void reset(void) override;
+    void set_notch_sample_rate(float sample_rate) override;
 
     // user settable parameters
     static const struct AP_Param::GroupInfo var_info[];
@@ -42,11 +43,23 @@ protected:
         // rate_error_body_radps = rate_target_body_radps - gyro_latest_radps.
         Vector3f rate_error_body_radps;
 
-        // Motor saturation flags from AP_Motors/AP_MotorsHeli. Use these in the custom rate law for
-        // anti-windup, observer freeze/bleed, or adaptive-state management.
+        // Motor saturation flags from AP_Motors/AP_MotorsHeli. These are now used by the ADRC body for
+        // anti-windup / observer slow-state leak when the mixer or actuators are saturated.
         bool motor_roll_limited;
         bool motor_pitch_limited;
         bool motor_yaw_limited;
+
+        // Axis mask flags. A disabled axis returns NAN and its ADRC state is kept reset so the observer
+        // does not update using an output that is not actually applied by AC_CustomControl::motor_set().
+        bool axis_roll_enabled;
+        bool axis_pitch_enabled;
+        bool axis_yaw_enabled;
+
+        // Final output limits and scale that will actually reach AP_Motors. These are passed into the
+        // ADRC body before ESO update so the observer input matches the applied actuator command.
+        float roll_pitch_output_limit;
+        float yaw_output_limit;
+        float output_scale;
 
         // Spool-state flags. State update and output permission are enforced before motor output,
         // but are also exposed so the user rate law can freeze or bleed internal states explicitly.
@@ -57,13 +70,13 @@ protected:
         bool allow_controller_update;
         bool allow_motor_output;
 
-        // True for Heli before rotor_runup_complete(). The custom backend uses this as a conservative
-        // non-PID equivalent of the native Heli yaw leaky-I protection.
+        // Kept for logging/diagnostics. In this custom-only patch it is derived from spool state because
+        // the official AC_AttitudeControl_Heli interface in the supplied folder does not expose
+        // rotor_runup_complete() to custom backends.
         bool low_control_authority;
 
-        // Heli piro-compensation interface. For custom rate controllers with roll/pitch slow states
-        // (ESO disturbance estimate, integrator-like state, adaptive term, etc.), rotate those states
-        // by piro_cos/piro_sin each update.
+        // Heli piro-compensation interface. If CC3_PIRO_COMP is enabled and roll/pitch custom axes are
+        // both active, roll/pitch ADRC slow ESO states are rotated by piro_cos/piro_sin each update.
         float piro_delta_angle_rad;
         float piro_cos;
         float piro_sin;
@@ -71,7 +84,7 @@ protected:
 
     struct ControllerOutput {
         // Normalized mixer inputs expected by AP_Motors/AP_MotorsHeli, not PWM, not torque,
-        // not desired angular velocity. Typical range after limiting is [-1, +1].
+        // not desired angular velocity. Typical range after limiting is [-1, +1]. NAN means no override.
         Vector3f normalized_rpy;
     };
 
@@ -83,8 +96,11 @@ protected:
 
     void reset_controller_state();
     void reset_for_spool_inhibition();
+    void reset_axis_state_if_disabled(const ControllerInput& input);
+    void log_adrc(const ControllerInput& input, const ControllerOutput& output) const;
 
     bool option_enabled(uint8_t option) const;
+    bool piro_comp_enabled() const;
     float get_output_limit_rp() const;
     float get_output_limit_yaw() const;
     float get_spool_output_scale() const;
@@ -101,6 +117,9 @@ protected:
         // unused in the rate-loop-only backend because the native angle loop now handles feed-forward
         // and large thrust-vector yaw priority before rate_bf_targets() is exposed here.
         OPTION_RUN_WHILE_SPOOLING = 1U << 2,
+
+        // Optional high-rate ADRC logs. Disabled by default to avoid extra logging load on real hardware.
+        OPTION_LOG_ADRC = 1U << 4,
     };
 
     // Parameters for the custom rate-loop backend interface layer.
@@ -108,6 +127,7 @@ protected:
     AP_Float _out_max_yaw;
     AP_Float _spool_output_scale;
     AP_Int8  _options;
+    AP_Int8  _piro_comp_enabled;
 
     // General user parameters passed through to the custom rate-controller body.
     // They are not consumed by the interface layer; use them inside run_user_controller().
@@ -117,6 +137,10 @@ protected:
 
     Vector3f _last_raw_out;
     Vector3f _last_limited_out;
+    AC_ADRC::UpdateDebug _roll_debug;
+    AC_ADRC::UpdateDebug _pitch_debug;
+    AC_ADRC::UpdateDebug _yaw_debug;
+
     bool _spool_inhibit_reset_done;
     bool _controller_has_run;
 };

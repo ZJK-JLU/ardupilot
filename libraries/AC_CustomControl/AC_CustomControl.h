@@ -46,6 +46,10 @@ public:
 
     AP_Motors* get_motors() const;    
 
+    bool axis_enabled_roll() const { return (_custom_controller_mask & (1U << 0)) != 0; }
+    bool axis_enabled_pitch() const { return (_custom_controller_mask & (1U << 1)) != 0; }
+    bool axis_enabled_yaw() const { return (_custom_controller_mask & (1U << 2)) != 0; }
+
     // set the PID notch sample rates
     void set_notch_sample_rate(float sample_rate);
 
