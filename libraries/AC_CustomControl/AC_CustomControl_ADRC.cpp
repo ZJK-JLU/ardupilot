@@ -229,7 +229,7 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
 
     // @Param: PIRO_COMP
     // @DisplayName: Custom ADRC piro compensation
-    // @Description: Enables helicopter piro compensation for ADRC roll/pitch slow ESO states. This is independent of the native ATC_PIRO_COMP parameter because the custom backend cannot directly read the private Heli flag from the supplied official attitude-controller interface.
+    // @Description: Enables helicopter piro compensation for ADRC roll/pitch slow ESO states. z2 is rotated for first- and second-order ADRC; z3 is rotated only if both roll and pitch axes are configured as second-order.
     // @Values: 0:Disabled,1:Enabled
     // @User: Advanced
     AP_GROUPINFO("PIRO_COMP", 11, AC_CustomControl_ADRC, _piro_comp_enabled, 0),
@@ -269,7 +269,7 @@ Vector3f AC_CustomControl_ADRC::update(void)
     }
 
     // Fuel helicopter safety: do not allow observer/integrator/adaptive-state buildup while the rotor
-    // is shut down, idling, or in a spooling transition unless explicitly enabled by CC3_OPTIONS bit 2.
+    // is shut down, idling, in a spooling transition, or before the Heli rotor has completed runup.
     if (is_spool_state_inhibited(input)) {
         reset_for_spool_inhibition();
         return no_override_output();
@@ -334,15 +334,17 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
 
     input.output_scale = input.spool_transition ? get_spool_output_scale() : 1.0f;
 
-    // The official AC_AttitudeControl_Heli files supplied with this request do not expose a public
-    // rotor_runup_complete() or custom low-authority hook, so the custom backend derives low-authority
-    // from the public AP_Motors spool state only.
-    input.low_control_authority = input.ground_or_idle || input.spool_transition;
+    // Use the vehicle-specific authority hook.  AC_AttitudeControl_Heli overrides this with
+    // !AP_MotorsHeli::rotor_runup_complete(), matching the native Heli yaw-rate protection.
+    input.low_control_authority = _att_control->custom_rate_controller_low_authority();
 
-    input.allow_controller_update = input.throttle_unlimited ||
-                                    (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
-    input.allow_motor_output = input.throttle_unlimited ||
-                               (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
+    const bool spool_state_allows_custom = input.throttle_unlimited ||
+                                           (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
+
+    // Even if the public spool state would otherwise allow output, do not update ADRC ESO or override
+    // motors until the vehicle-specific authority hook reports enough control authority.
+    input.allow_controller_update = spool_state_allows_custom && !input.low_control_authority;
+    input.allow_motor_output = spool_state_allows_custom && !input.low_control_authority;
 
     // Official native angle-loop output.  AC_AttitudeControl / AC_AttitudeControl_Heli has already
     // generated this value from target attitude, thrust-heading error, angle P/sqrt-controller,
@@ -654,6 +656,10 @@ bool AC_CustomControl_ADRC::is_spool_state_inhibited(const ControllerInput& inpu
     }
 
     if (input.spool_transition && !option_enabled(OPTION_RUN_WHILE_SPOOLING)) {
+        return true;
+    }
+
+    if (input.low_control_authority) {
         return true;
     }
 

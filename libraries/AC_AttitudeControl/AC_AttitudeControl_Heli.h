@@ -54,11 +54,6 @@ public:
 	// should be called at 100hz or more
 	virtual void rate_controller_run() override;
 
-    // Heli-specific low-authority guard used by custom rate backends to avoid observer/integrator
-    // buildup before the rotor has completed runup. This mirrors the native yaw controller's
-    // rotor_runup_complete() protection, generalized for non-PID custom rate controllers.
-    bool custom_rate_controller_low_authority() override { return !((AP_MotorsHeli&)_motors).rotor_runup_complete(); }
-
     // Update Alt_Hold angle maximum
     void update_althold_lean_angle_max(float throttle_in) override;
 
@@ -102,6 +97,10 @@ public:
 
     // set the PID notch sample rates
     void set_notch_sample_rate(float sample_rate) override;
+
+    // Custom rate-controller hook. Traditional heli has weak/invalid yaw and cyclic
+    // authority until the rotor has completed runup.
+    bool custom_rate_controller_low_authority() override;
 
     // user settable parameters
     static const struct AP_Param::GroupInfo var_info[];

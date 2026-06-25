@@ -70,9 +70,9 @@ protected:
         bool allow_controller_update;
         bool allow_motor_output;
 
-        // Kept for logging/diagnostics. In this custom-only patch it is derived from spool state because
-        // the official AC_AttitudeControl_Heli interface in the supplied folder does not expose
-        // rotor_runup_complete() to custom backends.
+        // Vehicle-specific low-authority flag from AC_AttitudeControl.  For Heli this is backed by
+        // AP_MotorsHeli::rotor_runup_complete(), so the ADRC backend will not build observer state or
+        // override motors before the rotor has completed runup.
         bool low_control_authority;
 
         // Heli piro-compensation interface. If CC3_PIRO_COMP is enabled and roll/pitch custom axes are

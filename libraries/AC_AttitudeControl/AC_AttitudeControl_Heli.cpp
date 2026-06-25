@@ -444,6 +444,15 @@ void AC_AttitudeControl_Heli::rate_controller_run()
 
 }
 
+// custom_rate_controller_low_authority - true while the rotor has not completed runup.
+// This mirrors the native yaw-rate controller protection, which leaks the yaw I-term
+// until AP_MotorsHeli::rotor_runup_complete() is true. Custom rate controllers should
+// not build observer/integrator state or override motors before this point.
+bool AC_AttitudeControl_Heli::custom_rate_controller_low_authority()
+{
+    return !((AP_MotorsHeli&)_motors).rotor_runup_complete();
+}
+
 // Update Alt_Hold angle maximum动态计算并平滑更新定高模式下的最大允许倾斜角
 void AC_AttitudeControl_Heli::update_althold_lean_angle_max(float throttle_in)
 {

@@ -250,6 +250,9 @@ bool AC_ADRC::update_all(float target,
         } else {
             _z2 = _z2 + _dt * (-beta2 * fe);
         }
+        // First-order ADRC does not use z3. Keep it zero so piro compensation
+        // and logs cannot carry a stale second-order state after ORDR is changed.
+        _z3 = 0.0f;
         break;
     }
 
@@ -332,15 +335,30 @@ void AC_ADRC::rotate_slow_states_xy(AC_ADRC& y_axis, float cos_yaw, float sin_ya
         return;
     }
 
+    // z2 is the disturbance/slow state for both first-order and second-order ADRC,
+    // so it is the ADRC equivalent of the official Heli PID I-term piro rotation.
     const float z2_x = _z2 * cos_yaw - y_axis._z2 * sin_yaw;
     const float z2_y = _z2 * sin_yaw + y_axis._z2 * cos_yaw;
-    const float z3_x = _z3 * cos_yaw - y_axis._z3 * sin_yaw;
-    const float z3_y = _z3 * sin_yaw + y_axis._z3 * cos_yaw;
-
     _z2 = z2_x;
     y_axis._z2 = z2_y;
-    _z3 = z3_x;
-    y_axis._z3 = z3_y;
+
+    // z3 exists as a member for all ADRC objects, but it is active only when ORDR=2.
+    // Do not rotate a second-order state into an axis configured as first-order.
+    const bool x_second_order = int8_t(_order.get()) == 2;
+    const bool y_second_order = int8_t(y_axis._order.get()) == 2;
+    if (x_second_order && y_second_order) {
+        const float z3_x = _z3 * cos_yaw - y_axis._z3 * sin_yaw;
+        const float z3_y = _z3 * sin_yaw + y_axis._z3 * cos_yaw;
+        _z3 = z3_x;
+        y_axis._z3 = z3_y;
+    } else {
+        if (!x_second_order) {
+            _z3 = 0.0f;
+        }
+        if (!y_second_order) {
+            y_axis._z3 = 0.0f;
+        }
+    }
 }
 
 bool AC_ADRC::validate_params(float output_limit, float output_scale) const

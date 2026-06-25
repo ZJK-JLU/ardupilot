@@ -58,8 +58,9 @@ public:
     void set_b0_default(float b0_default) { _b0.set(b0_default); }
 
     // Rotate roll/pitch slow ESO states for helicopter piro compensation.  Call on the
-    // roll-axis object and pass the pitch-axis object.  This intentionally rotates the
-    // disturbance/slow states only, not z1, because z1 is the measured angular-rate state.
+    // roll-axis object and pass the pitch-axis object.  This intentionally rotates z2
+    // for first- and second-order ADRC, and rotates z3 only when both axes are ORDR=2.
+    // z1 is not rotated because it is the measured angular-rate state.
     void rotate_slow_states_xy(AC_ADRC& y_axis, float cos_yaw, float sin_yaw);
 
     // Accessors for logging and diagnosis.

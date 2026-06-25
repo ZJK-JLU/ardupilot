@@ -246,11 +246,6 @@ public:
     // Run angular velocity controller and send outputs to the motors
     virtual void rate_controller_run() = 0;
 
-    // True when the native rate controller considers the rotor/actuator authority too low for
-    // normal closed-loop state accumulation.  The base implementation is false; Heli overrides
-    // this using AP_MotorsHeli::rotor_runup_complete().
-    virtual bool custom_rate_controller_low_authority() { return false; }
-
     // reset target loop rate modifications
     virtual void rate_controller_target_reset() {}
 
@@ -325,6 +320,11 @@ public:
 
     // Return angular velocity in radians used in the angular velocity controller
     Vector3f rate_bf_targets() const { return _ang_vel_body + _sysid_ang_vel_body; }
+
+    // Custom rate-controller hook. Backends that replace only the rate loop can use
+    // this to avoid updating/outputting while the vehicle-specific actuator authority
+    // is low. The default is false for non-heli vehicles.
+    virtual bool custom_rate_controller_low_authority() { return false; }
 
     // return the angular velocity of the target (setpoint) attitude rad/s
     const Vector3f& get_rate_ef_targets() const { return _euler_rate_target; }
