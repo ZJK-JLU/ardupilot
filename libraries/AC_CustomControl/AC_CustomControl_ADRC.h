@@ -4,9 +4,8 @@
 
 #if AP_CUSTOMCONTROL_ADRC_ENABLED
 
-#include <AC_ADRC/arduAttCont.h>
-
 #include "AC_CustomControl_Backend.h"
+#include "AC_ADRC.h"
 
 class AC_CustomControl_ADRC : public AC_CustomControl_Backend {
 public:
@@ -91,9 +90,11 @@ protected:
     float get_spool_output_scale() const;
     bool is_spool_state_inhibited(const ControllerInput& input) const;
 
-    // Simulink generated controller object. The default user-control body below calls this object,
-    // but all upstream/downstream interface and safety logic is outside the Simulink model.
-    arduAttCont simulink_controller;
+    // Per-axis ADRC rate-loop controllers.  The native angle loop supplies the body-frame
+    // angular-rate targets; these objects replace only the rate controller.
+    AC_ADRC _rate_roll_adrc;
+    AC_ADRC _rate_pitch_adrc;
+    AC_ADRC _rate_yaw_adrc;
 
     enum ADRCOption : uint8_t {
         // Keep bit 2 for compatibility with the earlier interface. Bits 0 and 1 are intentionally

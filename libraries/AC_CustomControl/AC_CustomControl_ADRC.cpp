@@ -54,18 +54,99 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("USR3", 7, AC_CustomControl_ADRC, _user_param3, 0.0f),
 
+    // @Param: RAT_RLL_WC
+    // @DisplayName: ADRC roll axis control bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_RLL_WO
+    // @DisplayName: ADRC roll axis ESO bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_RLL_B0
+    // @DisplayName: ADRC roll axis control input gain
+    // @User: Advanced
+
+    // @Param: RAT_RLL_DELT
+    // @DisplayName: ADRC roll axis control linear zone length
+    // @User: Advanced
+
+    // @Param: RAT_RLL_ORDR
+    // @DisplayName: ADRC roll axis control model order
+    // @User: Advanced
+
+    // @Param: RAT_RLL_LM
+    // @DisplayName: ADRC roll axis control output limit
+    // @User: Advanced
+    AP_SUBGROUPINFO(_rate_roll_adrc, "RAT_RLL_", 8, AC_CustomControl_ADRC, AC_ADRC),
+
+    // @Param: RAT_PIT_WC
+    // @DisplayName: ADRC pitch axis control bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_PIT_WO
+    // @DisplayName: ADRC pitch axis ESO bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_PIT_B0
+    // @DisplayName: ADRC pitch axis control input gain
+    // @User: Advanced
+
+    // @Param: RAT_PIT_DELT
+    // @DisplayName: ADRC pitch axis control linear zone length
+    // @User: Advanced
+
+    // @Param: RAT_PIT_ORDR
+    // @DisplayName: ADRC pitch axis control model order
+    // @User: Advanced
+
+    // @Param: RAT_PIT_LM
+    // @DisplayName: ADRC pitch axis control output limit
+    // @User: Advanced
+    AP_SUBGROUPINFO(_rate_pitch_adrc, "RAT_PIT_", 9, AC_CustomControl_ADRC, AC_ADRC),
+
+    // @Param: RAT_YAW_WC
+    // @DisplayName: ADRC yaw axis control bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_YAW_WO
+    // @DisplayName: ADRC yaw axis ESO bandwidth(rad/s)
+    // @User: Advanced
+
+    // @Param: RAT_YAW_B0
+    // @DisplayName: ADRC yaw axis control input gain
+    // @User: Advanced
+
+    // @Param: RAT_YAW_DELT
+    // @DisplayName: ADRC yaw axis control linear zone length
+    // @User: Advanced
+
+    // @Param: RAT_YAW_ORDR
+    // @DisplayName: ADRC yaw axis control model order
+    // @User: Advanced
+
+    // @Param: RAT_YAW_LM
+    // @DisplayName: ADRC yaw axis control output limit
+    // @User: Advanced
+    AP_SUBGROUPINFO(_rate_yaw_adrc, "RAT_YAW_", 10, AC_CustomControl_ADRC, AC_ADRC),
+
     AP_GROUPEND
 };
 
 // initialize in the constructor
 AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, AP_Motors* motors, float dt) :
     AC_CustomControl_Backend(frontend, ahrs, att_control, motors, dt),
+    _rate_roll_adrc(100.0f, dt),
+    _rate_pitch_adrc(100.0f, dt),
+    _rate_yaw_adrc(10.0f, dt),
     _last_raw_out(0.0f, 0.0f, 0.0f),
     _last_limited_out(0.0f, 0.0f, 0.0f),
     _spool_inhibit_reset_done(false),
     _controller_has_run(false)
 {
     AP_Param::setup_object_defaults(this, var_info);
+    _rate_roll_adrc.set_b0_default(100.0f);
+    _rate_pitch_adrc.set_b0_default(100.0f);
+    _rate_yaw_adrc.set_b0_default(10.0f);
     reset_controller_state();
 }
 
@@ -187,51 +268,27 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
         return true;
     }
 
-    // -------------------------------------------------------------------------
-    // Custom rate-control body starts here.
-    //
-    // Existing Simulink signature kept for compatibility, but the signal meaning
-    // is now rate-loop-only:
-    //   arg_rate_target : official native angle-loop output, body frame, rad/s
-    //   arg_rate_error  : arg_rate_target - gyro_latest, body frame, rad/s
-    //   arg_rate_meas   : gyro_latest, body frame, rad/s
-    //   arg_out         : normalized AP_Motors roll/pitch/yaw command
-    //
-    // A complete fuel-heli rate controller should also consume at least:
-    //   input.dt_s
-    //   input.motor_roll_limited / input.motor_pitch_limited / input.motor_yaw_limited
-    //   input.spool_state / input.allow_controller_update / input.allow_motor_output
-    //   input.piro_cos / input.piro_sin for roll-pitch slow-state rotation
-    //   _user_param1 / _user_param2 / _user_param3 as controller parameters
-    // -------------------------------------------------------------------------
+    _rate_roll_adrc.set_dt(input.dt_s);
+    _rate_pitch_adrc.set_dt(input.dt_s);
+    _rate_yaw_adrc.set_dt(input.dt_s);
 
-    float arg_rate_target[3] {
-        input.rate_target_body_radps.x,
-        input.rate_target_body_radps.y,
-        input.rate_target_body_radps.z
-    };
+    // ADRC ESO states are persistent body-frame roll/pitch states.  Rotate them
+    // by the Heli piro-compensation increment before the new rate update.
+    _rate_roll_adrc.rotate_eso_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
 
-    float arg_rate_error[3] {
-        input.rate_error_body_radps.x,
-        input.rate_error_body_radps.y,
-        input.rate_error_body_radps.z
-    };
+    output.normalized_rpy.x = _rate_roll_adrc.update_all(input.rate_target_body_radps.x,
+                                                         input.gyro_latest_radps.x,
+                                                         input.motor_roll_limited);
+    output.normalized_rpy.y = _rate_pitch_adrc.update_all(input.rate_target_body_radps.y,
+                                                          input.gyro_latest_radps.y,
+                                                          input.motor_pitch_limited);
+    output.normalized_rpy.z = _rate_yaw_adrc.update_all(input.rate_target_body_radps.z,
+                                                        input.gyro_latest_radps.z,
+                                                        input.motor_yaw_limited);
 
-    float arg_rate_meas[3] {
-        input.gyro_latest_radps.x,
-        input.gyro_latest_radps.y,
-        input.gyro_latest_radps.z
-    };
-
-    float arg_out[3] {};
-
-    simulink_controller.step(arg_rate_target, arg_rate_error, arg_rate_meas, arg_out);
-
-    output.normalized_rpy = Vector3f(arg_out[0], arg_out[1], arg_out[2]);
     _last_raw_out = output.normalized_rpy;
     _controller_has_run = true;
 
-    // Custom rate-control body ends here.
     return true;
 }
 
@@ -282,9 +339,18 @@ void AC_CustomControl_ADRC::reset(void)
 
 void AC_CustomControl_ADRC::reset_controller_state()
 {
-    // If your generated controller exposes a lighter reset_states() entry point, replace initialize()
-    // here.  Keep parameter initialization separate from state reset if your generated code supports it.
-    simulink_controller.initialize();
+    Vector3f gyro_latest(0.0f, 0.0f, 0.0f);
+    if (_ahrs != nullptr) {
+        gyro_latest = _ahrs->get_gyro_latest();
+    }
+
+    _rate_roll_adrc.reset_eso(gyro_latest.x);
+    _rate_pitch_adrc.reset_eso(gyro_latest.y);
+    _rate_yaw_adrc.reset_eso(gyro_latest.z);
+    _rate_roll_adrc.reset_filter();
+    _rate_pitch_adrc.reset_filter();
+    _rate_yaw_adrc.reset_filter();
+
     _last_raw_out.zero();
     _last_limited_out.zero();
     _controller_has_run = false;
