@@ -11,30 +11,26 @@
 // table of user settable parameters
 const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @Param: OUT_MAX_RP
-    // @DisplayName: Custom rate-loop roll/pitch output limit
-    // @Description: Maximum absolute normalized roll and pitch mixer command sent by the custom rate controller. Zero or negative uses the official attitude-controller maximum. Final output is always constrained to the official maximum.
+    // @DisplayName: Custom multicopter roll/pitch output limit
+    // @Description: Maximum absolute normalized roll and pitch mixer command sent by the custom multicopter rate controller. Zero or negative uses the official attitude-controller maximum. Final output is always constrained to the official maximum.
     // @Range: 0 1
     // @User: Advanced
     AP_GROUPINFO("OUT_MAX_RP", 1, AC_CustomControl_ADRC, _out_max_rp, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX),
 
     // @Param: OUT_MAX_Y
-    // @DisplayName: Custom rate-loop yaw output limit
-    // @Description: Maximum absolute normalized yaw mixer command sent by the custom rate controller. Zero or negative uses the official attitude-controller maximum. Final output is always constrained to the official maximum.
+    // @DisplayName: Custom multicopter yaw output limit
+    // @Description: Maximum absolute normalized yaw mixer command sent by the custom multicopter rate controller. Zero or negative uses the official attitude-controller maximum. Final output is always constrained to the official maximum.
     // @Range: 0 1
     // @User: Advanced
     AP_GROUPINFO("OUT_MAX_Y", 2, AC_CustomControl_ADRC, _out_max_yaw, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX),
 
-    // @Param: SPOOL_SCL
-    // @DisplayName: Custom rate-loop spooling output scale
-    // @Description: Output multiplier during SPOOLING_UP and SPOOLING_DOWN when CC3_OPTIONS bit 2 is enabled. Default zero keeps custom rate-loop output inhibited until THROTTLE_UNLIMITED.
-    // @Range: 0 1
-    // @User: Advanced
-    AP_GROUPINFO("SPOOL_SCL", 3, AC_CustomControl_ADRC, _spool_output_scale, 0.0f),
+    // Index 3 was SPOOL_SCL in the helicopter-oriented backend.  It is intentionally unused here.
+    // Multicopter ADRC does not scale output during spooling; it only overrides motors in THROTTLE_UNLIMITED.
 
     // @Param: OPTIONS
-    // @DisplayName: Custom rate-loop controller options
-    // @Description: Bit 2 allows controller update/output during spooling; output is scaled by CC3_SPOOL_SCL. Bit 4 enables high-rate ADRC diagnostic logging. Bits 0 and 1 are unused in the rate-loop-only backend because the native angle loop handles feed-forward and large thrust-vector yaw priority before the rate target is exposed.
-    // @Bitmask: 2:RunWhileSpooling,4:LogADRC
+    // @DisplayName: Custom multicopter ADRC options
+    // @Description: Bit 4 enables high-rate ADRC diagnostic logging. Other bits are unused in this multicopter rate-loop-only backend.
+    // @Bitmask: 4:LogADRC
     // @User: Advanced
     AP_GROUPINFO("OPTIONS", 4, AC_CustomControl_ADRC, _options, 0),
 
@@ -227,16 +223,12 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     // @User: Advanced
     AP_SUBGROUPINFO(_rate_yaw_adrc, "RAT_YAW_", 10, AC_CustomControl_ADRC, AC_ADRC),
 
-    // @Param: PIRO_COMP
-    // @DisplayName: Custom ADRC piro compensation
-    // @Description: Enables helicopter piro compensation for ADRC roll/pitch slow ESO states. z2 is rotated for first- and second-order ADRC; z3 is rotated only if both roll and pitch axes are configured as second-order.
-    // @Values: 0:Disabled,1:Enabled
-    // @User: Advanced
-    AP_GROUPINFO("PIRO_COMP", 11, AC_CustomControl_ADRC, _piro_comp_enabled, 0),
+    // Index 11 was PIRO_COMP in the helicopter-oriented backend.  It is intentionally unused here.
+    // Multicopter roll/pitch ADRC states are kept independent; no piro compensation is applied.
 
     // @Param: SW_TIME
     // @DisplayName: Custom ADRC switch blend time
-    // @Description: Time in seconds used to blend between native Heli rate-controller output and ADRC output when enabling or disabling custom control in flight. Zero disables the time ramp.
+    // @Description: Time in seconds used to blend between native multicopter rate-controller output and ADRC output when enabling or disabling custom control in flight. Zero disables the time ramp.
     // @Range: 0 5
     // @Units: s
     // @User: Advanced
@@ -245,7 +237,6 @@ const AP_Param::GroupInfo AC_CustomControl_ADRC::var_info[] = {
     AP_GROUPEND
 };
 
-// initialize in the constructor
 AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS_View*& ahrs, AC_AttitudeControl*& att_control, AP_Motors* motors, float dt) :
     AC_CustomControl_Backend(frontend, ahrs, att_control, motors, dt),
     _rate_roll_adrc(100.0f, dt),
@@ -258,7 +249,7 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
     _yaw_debug{},
     _custom_blend(0.0f),
     _desired_enabled(false),
-    _spool_inhibit_reset_done(false),
+    _motor_inhibit_reset_done(false),
     _controller_has_run(false)
 {
     AP_Param::setup_object_defaults(this, var_info);
@@ -268,8 +259,6 @@ AC_CustomControl_ADRC::AC_CustomControl_ADRC(AC_CustomControl& frontend, AP_AHRS
     reset_controller_state();
 }
 
-// update controller
-// return normalized roll, pitch, yaw mixer input. NAN on an axis means "do not override official output".
 Vector3f AC_CustomControl_ADRC::update(void)
 {
     ControllerInput input;
@@ -278,18 +267,16 @@ Vector3f AC_CustomControl_ADRC::update(void)
         return no_override_output();
     }
 
-    // Fuel helicopter safety: do not allow observer/integrator/adaptive-state buildup while the rotor
-    // is shut down, idling, in a spooling transition, or before the Heli rotor has completed runup.
-    if (is_spool_state_inhibited(input)) {
-        reset_for_spool_inhibition();
+    // Multicopter safety: do not allow observer buildup while motors are not in the active
+    // THROTTLE_UNLIMITED state.  This removes helicopter rotor-runup and spool-scale behaviour.
+    if (is_motor_state_inhibited(input)) {
+        reset_for_motor_inhibition();
         return no_override_output();
     }
 
-    // If we were inhibited by a previous spool state, start the custom rate controller from a clean
-    // state when the rotor reaches a state where custom rate output is allowed.
-    if (_spool_inhibit_reset_done) {
+    if (_motor_inhibit_reset_done) {
         reset_controller_state();
-        _spool_inhibit_reset_done = false;
+        _motor_inhibit_reset_done = false;
     }
 
     input.custom_blend = update_custom_blend(input.dt_s);
@@ -328,60 +315,22 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
     input.yaw_output_limit = get_output_limit_yaw();
 
     input.spool_state = _motors->get_spool_state();
-    input.ground_or_idle = false;
-    input.spool_transition = false;
-    input.throttle_unlimited = false;
+    input.motors_active = (input.spool_state == AP_Motors::SpoolState::THROTTLE_UNLIMITED);
+    input.allow_controller_update = input.motors_active;
+    input.allow_motor_output = input.motors_active;
 
-    switch (input.spool_state) {
-        case AP_Motors::SpoolState::SHUT_DOWN:
-        case AP_Motors::SpoolState::GROUND_IDLE:
-            input.ground_or_idle = true;
-            break;
-
-        case AP_Motors::SpoolState::SPOOLING_UP:
-        case AP_Motors::SpoolState::SPOOLING_DOWN:
-            input.spool_transition = true;
-            break;
-
-        case AP_Motors::SpoolState::THROTTLE_UNLIMITED:
-            input.throttle_unlimited = true;
-            break;
-    }
-
-    input.output_scale = input.spool_transition ? get_spool_output_scale() : 1.0f;
-
-    // Use the vehicle-specific authority hook.  AC_AttitudeControl_Heli overrides this with
-    // !AP_MotorsHeli::rotor_runup_complete(), matching the native Heli yaw-rate protection.
-    input.low_control_authority = _att_control->custom_rate_controller_low_authority();
-
-    const bool spool_state_allows_custom = input.throttle_unlimited ||
-                                           (input.spool_transition && option_enabled(OPTION_RUN_WHILE_SPOOLING) && is_positive(input.output_scale));
-
-    // Even if the public spool state would otherwise allow output, do not update ADRC ESO or override
-    // motors until the vehicle-specific authority hook reports enough control authority.
-    input.allow_controller_update = spool_state_allows_custom && !input.low_control_authority;
-    input.allow_motor_output = spool_state_allows_custom && !input.low_control_authority;
-
-    // Official native angle-loop output.  AC_AttitudeControl / AC_AttitudeControl_Heli has already
-    // generated this value from target attitude, thrust-heading error, angle P/sqrt-controller,
-    // acceleration limiting, feed-forward and Heli-specific input wrappers.  This backend must not
-    // recompute attitude error or angle-loop rate demand when operating in rate-loop-only mode.
     input.rate_target_body_radps = _att_control->rate_bf_targets();
-
-    // Latest angular-rate feedback.
     input.gyro_latest_radps = _ahrs->get_gyro_latest();
-
-    // Native official output from AC_AttitudeControl_Heli::rate_controller_run().  During switching,
-    // ADRC blends against this value and updates its ESO with the blended output that reaches motors.
     input.native_output_rpy = _att_control->custom_rate_controller_native_output();
     input.custom_blend = _custom_blend;
-    input.leaky_i_leak_rate = _att_control->custom_rate_controller_rate_leak_rate();
 
     if (!isfinite(input.rate_target_body_radps.x) || !isfinite(input.rate_target_body_radps.y) || !isfinite(input.rate_target_body_radps.z) ||
         !isfinite(input.gyro_latest_radps.x) || !isfinite(input.gyro_latest_radps.y) || !isfinite(input.gyro_latest_radps.z)) {
         return false;
     }
 
+    // Native output is required only while blending.  AC_AttitudeControl_Multi is patched to provide
+    // total native output including official rate feed-forward, so the handover is as close as possible.
     if ((input.custom_blend < 1.0f) &&
         ((input.axis_roll_enabled && !isfinite(input.native_output_rpy.x)) ||
          (input.axis_pitch_enabled && !isfinite(input.native_output_rpy.y)) ||
@@ -389,34 +338,15 @@ bool AC_CustomControl_ADRC::build_controller_input(ControllerInput& input)
         return false;
     }
 
-    if (!isfinite(input.leaky_i_leak_rate) || (input.leaky_i_leak_rate < 0.0f)) {
-        input.leaky_i_leak_rate = 0.0f;
-    }
-
-    // Custom rate-loop error.  This is available for logging and for future custom-rate-law changes.
     input.rate_error_body_radps = input.rate_target_body_radps - input.gyro_latest_radps;
 
     input.motor_roll_limited = _motors->limit.roll;
     input.motor_pitch_limited = _motors->limit.pitch;
     input.motor_yaw_limited = _motors->limit.yaw;
 
-    // Piro-compensation interface for Heli roll/pitch slow states.
-    input.piro_delta_angle_rad = -input.gyro_latest_radps.z * input.dt_s;
-    input.piro_cos = cosf(input.piro_delta_angle_rad);
-    input.piro_sin = sinf(input.piro_delta_angle_rad);
-    if (!isfinite(input.piro_cos) || !isfinite(input.piro_sin)) {
-        input.piro_delta_angle_rad = 0.0f;
-        input.piro_cos = 1.0f;
-        input.piro_sin = 0.0f;
-    }
-
     return true;
 }
 
-// This is the only function that should contain the custom rate control law.
-// The surrounding update path has already preserved the official angle loop, target generation,
-// input shaping, thrust-vector priority, Heli spool-state protection, motor saturation flags and
-// output limiting.
 bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, ControllerOutput& output)
 {
     output.normalized_rpy = no_override_output();
@@ -438,10 +368,9 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                             input.gyro_latest_radps.x,
                                             input.motor_roll_limited,
                                             input.roll_pitch_output_limit,
-                                            input.output_scale,
+                                            1.0f,
                                             input.native_output_rpy.x,
                                             input.custom_blend,
-                                            input.leaky_i_leak_rate,
                                             output.normalized_rpy.x,
                                             &_roll_debug);
     }
@@ -451,10 +380,9 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                              input.gyro_latest_radps.y,
                                              input.motor_pitch_limited,
                                              input.roll_pitch_output_limit,
-                                             input.output_scale,
+                                             1.0f,
                                              input.native_output_rpy.y,
                                              input.custom_blend,
-                                             input.leaky_i_leak_rate,
                                              output.normalized_rpy.y,
                                              &_pitch_debug);
     }
@@ -464,10 +392,9 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
                                            input.gyro_latest_radps.z,
                                            input.motor_yaw_limited,
                                            input.yaw_output_limit,
-                                           input.output_scale,
+                                           1.0f,
                                            input.native_output_rpy.z,
                                            input.custom_blend,
-                                           input.leaky_i_leak_rate,
                                            output.normalized_rpy.z,
                                            &_yaw_debug);
     }
@@ -476,13 +403,7 @@ bool AC_CustomControl_ADRC::run_user_controller(const ControllerInput& input, Co
         return false;
     }
 
-    // Match the official Heli timing: native Heli computes roll/pitch output first,
-    // then rotates the slow I-state for the next loop.  ADRC now does the same by
-    // rotating z2/z3 after update_all(), so the current output is not changed by piro comp.
-    if (piro_comp_enabled() && input.axis_roll_enabled && input.axis_pitch_enabled) {
-        _rate_roll_adrc.rotate_slow_states_xy(_rate_pitch_adrc, input.piro_cos, input.piro_sin);
-    }
-
+    // Multicopter ADRC keeps roll, pitch and yaw observers independent. No helicopter piro compensation.
     _last_raw_out.x = input.axis_roll_enabled ? _roll_debug.raw_output : NAN;
     _last_raw_out.y = input.axis_pitch_enabled ? _pitch_debug.raw_output : NAN;
     _last_raw_out.z = input.axis_yaw_enabled ? _yaw_debug.raw_output : NAN;
@@ -500,8 +421,8 @@ Vector3f AC_CustomControl_ADRC::finalize_output(const ControllerInput& input, co
         return no_override_output();
     }
 
-    // Validate only the axes that are actually enabled. Disabled axes intentionally remain NAN so
-    // AC_CustomControl::motor_set() leaves the official Heli rate controller output untouched.
+    // Validate only axes that are actually enabled. Disabled axes intentionally remain NAN so
+    // AC_CustomControl::motor_set() leaves the official multicopter rate-controller output untouched.
     if ((input.axis_roll_enabled && !isfinite(motor_out.x)) ||
         (input.axis_pitch_enabled && !isfinite(motor_out.y)) ||
         (input.axis_yaw_enabled && !isfinite(motor_out.z))) {
@@ -546,17 +467,15 @@ void AC_CustomControl_ADRC::reset(void)
     reset_controller_state();
     _custom_blend = 0.0f;
     _desired_enabled = false;
-    _spool_inhibit_reset_done = false;
+    _motor_inhibit_reset_done = false;
 }
 
 void AC_CustomControl_ADRC::set_enabled(bool enabled)
 {
     _desired_enabled = enabled;
     if (enabled) {
-        // Begin a native->ADRC handover.  update_all() blends from the latest official
-        // Heli output and also seeds the SMAX state from that native output.
         _custom_blend = 0.0f;
-        _spool_inhibit_reset_done = false;
+        _motor_inhibit_reset_done = false;
     }
 }
 
@@ -567,9 +486,8 @@ bool AC_CustomControl_ADRC::is_transition_active() const
 
 bool AC_CustomControl_ADRC::suppress_main_rate_integrators() const
 {
-    // Suppress native PID I only when ADRC has full authority.  During switch-on/off
-    // blends, the native output is still part of the applied command and its integrator
-    // should not be zeroed.
+    // Suppress native PID I only when ADRC has full authority. During switch-on/off blends,
+    // the native output is still part of the applied command and its integrator should keep running.
     return _desired_enabled && (_custom_blend >= 0.999f) && _controller_has_run;
 }
 
@@ -602,12 +520,12 @@ void AC_CustomControl_ADRC::reset_controller_state()
     _controller_has_run = false;
 }
 
-void AC_CustomControl_ADRC::reset_for_spool_inhibition()
+void AC_CustomControl_ADRC::reset_for_motor_inhibition()
 {
-    if (!_spool_inhibit_reset_done) {
+    if (!_motor_inhibit_reset_done) {
         reset_controller_state();
         _custom_blend = 0.0f;
-        _spool_inhibit_reset_done = true;
+        _motor_inhibit_reset_done = true;
     }
 }
 
@@ -646,12 +564,9 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
     flags |= _roll_debug.antiwindup_active ? (1U << 9) : 0U;
     flags |= _pitch_debug.antiwindup_active ? (1U << 10) : 0U;
     flags |= _yaw_debug.antiwindup_active ? (1U << 11) : 0U;
-    flags |= piro_comp_enabled() ? (1U << 12) : 0U;
-    flags |= input.spool_transition ? (1U << 13) : 0U;
-    flags |= input.low_control_authority ? (1U << 14) : 0U;
-    flags |= input.allow_motor_output ? (1U << 15) : 0U;
-    flags |= is_positive(input.leaky_i_leak_rate) ? (1U << 16) : 0U;
-    flags |= (input.custom_blend < 0.999f) ? (1U << 17) : 0U;
+    flags |= input.allow_motor_output ? (1U << 12) : 0U;
+    flags |= (input.custom_blend < 0.999f) ? (1U << 13) : 0U;
+    flags |= input.motors_active ? (1U << 14) : 0U;
 
     AP::logger().Write("CCAR", "TimeUS,TR,TP,TY,GR,GP,GY,RR,RP,RY,OR,OP,OY,Flg", "QffffffffffffI",
                        AP_HAL::micros64(),
@@ -690,11 +605,6 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
 bool AC_CustomControl_ADRC::option_enabled(uint8_t option) const
 {
     return (uint8_t(_options.get()) & option) != 0;
-}
-
-bool AC_CustomControl_ADRC::piro_comp_enabled() const
-{
-    return int8_t(_piro_comp_enabled.get()) != 0;
 }
 
 float AC_CustomControl_ADRC::get_switch_blend_time() const
@@ -737,26 +647,9 @@ float AC_CustomControl_ADRC::get_output_limit_yaw() const
     return constrain_float(out_max_yaw, 0.0f, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX);
 }
 
-float AC_CustomControl_ADRC::get_spool_output_scale() const
+bool AC_CustomControl_ADRC::is_motor_state_inhibited(const ControllerInput& input) const
 {
-    return constrain_float(_spool_output_scale.get(), 0.0f, 1.0f);
-}
-
-bool AC_CustomControl_ADRC::is_spool_state_inhibited(const ControllerInput& input) const
-{
-    if (input.ground_or_idle) {
-        return true;
-    }
-
-    if (input.spool_transition && !option_enabled(OPTION_RUN_WHILE_SPOOLING)) {
-        return true;
-    }
-
-    if (input.low_control_authority) {
-        return true;
-    }
-
-    return false;
+    return !input.motors_active;
 }
 
 #endif  // AP_CUSTOMCONTROL_ADRC_ENABLED

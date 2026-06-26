@@ -80,6 +80,10 @@ public:
     void rate_controller_target_reset() override;
     void rate_controller_run() override;
 
+    // Return the native multicopter rate-controller output most recently written before customcontrol overrides it.
+    // This value includes the official rate feed-forward terms because customcontrol writes a total R/P/Y output.
+    Vector3f custom_rate_controller_native_output() const override { return _custom_rate_controller_native_output; }
+
     // sanity check parameters.  should be called once before take-off
     void parameter_sanity_check() override;
 
@@ -101,6 +105,11 @@ protected:
     float get_throttle_avg_max(float throttle_in);
 
     AP_MotorsMulticopter& _motors_multi;
+
+    // Total native rate-controller output last written to AP_Motors. Used only by customcontrol
+    // for smooth handover between official multicopter PID and ADRC. It does not feed back into
+    // the official controller.
+    Vector3f _custom_rate_controller_native_output;
     AC_PID                _pid_rate_roll {
         AC_PID::Defaults{
             .p         = AC_ATC_MULTI_RATE_RP_P,

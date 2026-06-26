@@ -41,7 +41,7 @@ const AP_Param::GroupInfo AC_ADRC::var_info[] = {
 
     // @Param: LM
     // @DisplayName: ADRC local output limit
-    // @Description: Maximum absolute normalized mixer command allowed inside this ADRC axis before spool scaling, final backend limiting and slew limiting. Zero disables this local limit and uses the backend final limit.
+    // @Description: Maximum absolute normalized mixer command allowed inside this ADRC axis before final backend limiting and slew limiting. Zero disables this local limit and uses the backend final limit.
     // @Range: 0 1
     // @User: Advanced
     AP_GROUPINFO("LM", 6, AC_ADRC, _limit, 1.0f),
@@ -76,7 +76,7 @@ const AP_Param::GroupInfo AC_ADRC::var_info[] = {
 
     // @Param: NFRQ
     // @DisplayName: ADRC gyro notch center frequency
-    // @Description: Static notch filter center frequency applied to gyro measurement before ADRC. Zero disables the notch. Use this only for a known main-rotor, tail-rotor, engine or drivetrain vibration frequency.
+    // @Description: Static notch filter center frequency applied to gyro measurement before ADRC. Zero disables the notch. Use this only for a known propeller, motor, frame or drivetrain vibration frequency.
     // @Range: 0 400
     // @Units: Hz
     // @User: Advanced
@@ -92,7 +92,7 @@ const AP_Param::GroupInfo AC_ADRC::var_info[] = {
 
     // @Param: SMAX
     // @DisplayName: ADRC output slew limit
-    // @Description: Final applied-output slew limit in normalized mixer output per second. Zero disables this feature. This is not the official AC_HELI_PID SMAX algorithm, but it prevents abrupt custom-control swash/tail commands.
+    // @Description: Final applied-output slew limit in normalized mixer output per second. Zero disables this feature. This is not the official AC_PID SMAX algorithm, but it prevents abrupt custom-control multicopter mixer commands.
     // @Range: 0 200
     // @User: Advanced
     AP_GROUPINFO("SMAX", 13, AC_ADRC, _smax, 0.0f),
@@ -138,7 +138,6 @@ bool AC_ADRC::update_all(float target,
                          float output_scale,
                          float native_output,
                          float custom_blend,
-                         float external_leak_fraction,
                          float& output,
                          UpdateDebug* debug)
 {
@@ -146,8 +145,7 @@ bool AC_ADRC::update_all(float target,
     reset_debug(debug);
 
     if (!isfinite(target) || !isfinite(measurement) || !validate_params(output_limit, output_scale) ||
-        !isfinite(custom_blend) || (custom_blend < 0.0f) || (custom_blend > 1.0f) ||
-        !isfinite(external_leak_fraction) || (external_leak_fraction < 0.0f)) {
+        !isfinite(custom_blend) || (custom_blend < 0.0f) || (custom_blend > 1.0f)) {
         return false;
     }
 
@@ -168,13 +166,6 @@ bool AC_ADRC::update_all(float target,
     const float delta = _delta.get();
     const int8_t order = int8_t(_order.get());
 
-    const float external_leak = constrain_float(external_leak_fraction, 0.0f, 1.0f);
-    const bool external_leak_active = external_leak > 0.0f;
-    if (external_leak_active) {
-        // Mirrors the Heli AC_HELI_PID leaky-I mode. Apply before computing this loop's
-        // output so the slow-state contribution is reduced immediately, like the native PID I-term.
-        leak_slow_states(external_leak);
-    }
 
     const float target_filtered = apply_lpf(target, _fltt_hz.get(), _target_lpf_state, _target_lpf_initialised);
     const float measurement_notched = apply_notch(measurement);
@@ -233,13 +224,13 @@ bool AC_ADRC::update_all(float target,
     const float local_limit_param = _limit.get();
     const float local_limit = is_positive(local_limit_param) ? MIN(local_limit_param, final_limit) : final_limit;
 
-    // First compute the custom side of the output chain: ADRC local/final limiting and spool scaling.
+    // First compute the custom side of the output chain: ADRC local/final limiting and optional output scaling.
     float custom_output = constrain_float(raw_output, -local_limit, local_limit) * constrain_float(output_scale, 0.0f, 1.0f);
     custom_output = constrain_float(custom_output, -final_limit, final_limit);
 
     const float native_for_blend = isfinite(native_output) ? constrain_float(native_output, -final_limit, final_limit) : custom_output;
 
-    // Blend from/to the native Heli rate-controller output during switching.  The ESO is updated
+    // Blend from/to the native multicopter rate-controller output during switching. The ESO is updated
     // with this blended command because it is the actual value returned to AP_Motors this cycle.
     float applied_output = native_for_blend * (1.0f - blend) + custom_output * blend;
     applied_output = constrain_float(applied_output, -final_limit, final_limit);
@@ -282,8 +273,8 @@ bool AC_ADRC::update_all(float target,
         } else {
             _z2 = _z2 + _dt * (-beta2 * fe);
         }
-        // First-order ADRC does not use z3. Keep it zero so piro compensation
-        // and logs cannot carry a stale second-order state after ORDR is changed.
+        // First-order ADRC does not use z3. Keep it zero so logs cannot carry
+        // a stale second-order state after ORDR is changed.
         _z3 = 0.0f;
         break;
     }
@@ -315,20 +306,20 @@ bool AC_ADRC::update_all(float target,
         reset_eso(measurement);
         output = NAN;
         fill_debug(debug, target_filtered, measurement_filtered, adrc_output, ff_output, raw_output, NAN,
-                   native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, external_leak_active, false);
+                   native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, false);
         return false;
     }
 
     output = applied_output;
     fill_debug(debug, target_filtered, measurement_filtered, adrc_output, ff_output, raw_output, applied_output,
-               native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, external_leak_active, true);
+               native_output, blend, motor_limited, output_limited, slew_limited, antiwindup_active, true);
     return true;
 }
 
 float AC_ADRC::update_all(float target, float measurement, bool motor_limited)
 {
     float output = NAN;
-    if (!update_all(target, measurement, motor_limited, 1.0f, 1.0f, NAN, 1.0f, 0.0f, output, nullptr)) {
+    if (!update_all(target, measurement, motor_limited, 1.0f, 1.0f, NAN, 1.0f, output, nullptr)) {
         return NAN;
     }
     return output;
@@ -366,37 +357,6 @@ void AC_ADRC::set_notch_sample_rate(float sample_rate_hz)
     }
 }
 
-void AC_ADRC::rotate_slow_states_xy(AC_ADRC& y_axis, float cos_yaw, float sin_yaw)
-{
-    if (!isfinite(cos_yaw) || !isfinite(sin_yaw)) {
-        return;
-    }
-
-    // z2 is the disturbance/slow state for both first-order and second-order ADRC,
-    // so it is the ADRC equivalent of the official Heli PID I-term piro rotation.
-    const float z2_x = _z2 * cos_yaw - y_axis._z2 * sin_yaw;
-    const float z2_y = _z2 * sin_yaw + y_axis._z2 * cos_yaw;
-    _z2 = z2_x;
-    y_axis._z2 = z2_y;
-
-    // z3 exists as a member for all ADRC objects, but it is active only when ORDR=2.
-    // Do not rotate a second-order state into an axis configured as first-order.
-    const bool x_second_order = int8_t(_order.get()) == 2;
-    const bool y_second_order = int8_t(y_axis._order.get()) == 2;
-    if (x_second_order && y_second_order) {
-        const float z3_x = _z3 * cos_yaw - y_axis._z3 * sin_yaw;
-        const float z3_y = _z3 * sin_yaw + y_axis._z3 * cos_yaw;
-        _z3 = z3_x;
-        y_axis._z3 = z3_y;
-    } else {
-        if (!x_second_order) {
-            _z3 = 0.0f;
-        }
-        if (!y_second_order) {
-            y_axis._z3 = 0.0f;
-        }
-    }
-}
 
 bool AC_ADRC::validate_params(float output_limit, float output_scale) const
 {
@@ -544,7 +504,6 @@ void AC_ADRC::reset_debug(UpdateDebug* debug) const
     debug->output_limited = false;
     debug->slew_limited = false;
     debug->antiwindup_active = false;
-    debug->external_leak_active = false;
     debug->valid = false;
 }
 
@@ -561,7 +520,6 @@ void AC_ADRC::fill_debug(UpdateDebug* debug,
                          bool output_limited,
                          bool slew_limited,
                          bool antiwindup_active,
-                         bool external_leak_active,
                          bool valid) const
 {
     if (debug == nullptr) {
@@ -579,16 +537,9 @@ void AC_ADRC::fill_debug(UpdateDebug* debug,
     debug->output_limited = output_limited;
     debug->slew_limited = slew_limited;
     debug->antiwindup_active = antiwindup_active;
-    debug->external_leak_active = external_leak_active;
     debug->valid = valid;
 }
 
-void AC_ADRC::leak_slow_states(float leak_fraction)
-{
-    const float leak_scale = 1.0f - constrain_float(leak_fraction, 0.0f, 1.0f);
-    _z2 *= leak_scale;
-    _z3 *= leak_scale;
-}
 
 float AC_ADRC::fal(float e, float alpha, float delta) const
 {

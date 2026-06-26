@@ -325,6 +325,7 @@ AC_AttitudeControl_Multi::AC_AttitudeControl_Multi(AP_AHRS_View &ahrs, const AP_
     _motors_multi(motors)
 {
     AP_Param::setup_object_defaults(this, var_info);
+    _custom_rate_controller_native_output.zero();
 
 #if AP_FILTER_ENABLED
     set_notch_sample_rate(AP::scheduler().get_loop_rate_hz());
@@ -455,14 +456,27 @@ void AC_AttitudeControl_Multi::rate_controller_run_dt(const Vector3f& gyro, floa
     _rate_gyro = gyro;
     _rate_gyro_time_us = AP_HAL::micros64();
 
-    _motors.set_roll(get_rate_roll_pid().update_all(ang_vel_body.x, gyro.x,  dt, _motors.limit.roll, _pd_scale.x) + _actuator_sysid.x);
-    _motors.set_roll_ff(get_rate_roll_pid().get_ff());
+    const float roll_out = get_rate_roll_pid().update_all(ang_vel_body.x, gyro.x,  dt, _motors.limit.roll, _pd_scale.x) + _actuator_sysid.x;
+    const float roll_ff = get_rate_roll_pid().get_ff();
+    _motors.set_roll(roll_out);
+    _motors.set_roll_ff(roll_ff);
 
-    _motors.set_pitch(get_rate_pitch_pid().update_all(ang_vel_body.y, gyro.y,  dt, _motors.limit.pitch, _pd_scale.y) + _actuator_sysid.y);
-    _motors.set_pitch_ff(get_rate_pitch_pid().get_ff());
+    const float pitch_out = get_rate_pitch_pid().update_all(ang_vel_body.y, gyro.y,  dt, _motors.limit.pitch, _pd_scale.y) + _actuator_sysid.y;
+    const float pitch_ff = get_rate_pitch_pid().get_ff();
+    _motors.set_pitch(pitch_out);
+    _motors.set_pitch_ff(pitch_ff);
 
-    _motors.set_yaw(get_rate_yaw_pid().update_all(ang_vel_body.z, gyro.z,  dt, _motors.limit.yaw, _pd_scale.z) + _actuator_sysid.z);
-    _motors.set_yaw_ff(get_rate_yaw_pid().get_ff()*_feedforward_scalar);
+    const float yaw_out = get_rate_yaw_pid().update_all(ang_vel_body.z, gyro.z,  dt, _motors.limit.yaw, _pd_scale.z) + _actuator_sysid.z;
+    const float yaw_ff = get_rate_yaw_pid().get_ff() * _feedforward_scalar;
+    _motors.set_yaw(yaw_out);
+    _motors.set_yaw_ff(yaw_ff);
+
+    // Customcontrol overrides set_roll/set_pitch/set_yaw with a total normalized mixer command and
+    // zeros the separate official feed-forward channels on overridden axes. Therefore the native
+    // handover reference must include both the official PID side and the official FF side.
+    _custom_rate_controller_native_output.x = roll_out + roll_ff;
+    _custom_rate_controller_native_output.y = pitch_out + pitch_ff;
+    _custom_rate_controller_native_output.z = yaw_out + yaw_ff;
 
     _pd_scale_used = _pd_scale;
 

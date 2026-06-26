@@ -6,7 +6,9 @@
 
 #include "AC_CustomControl_Backend.h"
 // #include "AC_CustomControl_Empty.h"
+#if AP_CUSTOMCONTROL_PID_ENABLED
 #include "AC_CustomControl_PID.h"
+#endif
 #include "AC_CustomControl_ADRC.h"
 #include <GCS_MAVLink/GCS.h>
 #include <AP_Logger/AP_Logger.h>
@@ -31,8 +33,10 @@ const AP_Param::GroupInfo AC_CustomControl::var_info[] = {
     // parameters for empty controller. only used as a template, no need for param table 
     // AP_SUBGROUPVARPTR(_backend, "1_", 6, AC_CustomControl, _backend_var_info[0]),
 
+#if AP_CUSTOMCONTROL_PID_ENABLED
     // parameters for PID controller
     AP_SUBGROUPVARPTR(_backend, "2_", 7, AC_CustomControl, _backend_var_info[1]),
+#endif
 
     // parameters for ADRC controller
     AP_SUBGROUPVARPTR(_backend, "3_", 8, AC_CustomControl, _backend_var_info[2]),
@@ -69,8 +73,10 @@ void AC_CustomControl::init(void)
             // _backend_var_info[get_type()] = AC_CustomControl_Empty::var_info;
             break;
         case CustomControlType::CONT_PID:
+#if AP_CUSTOMCONTROL_PID_ENABLED
             _backend = NEW_NOTHROW AC_CustomControl_PID(*this, _ahrs, _att_control, motors, _dt);
             _backend_var_info[get_type()] = AC_CustomControl_PID::var_info;
+#endif
             break;
         case CustomControlType::CONT_ADRC:
             _backend = NEW_NOTHROW AC_CustomControl_ADRC(*this, _ahrs, _att_control, motors, _dt);
@@ -112,6 +118,7 @@ void AC_CustomControl::motor_set(const Vector3f& rpy) {
     if ((_custom_controller_mask & uint8_t(CustomControlOption::ROLL)) && roll_valid) {
         const float roll_out = constrain_float(rpy.x, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
         motors->set_roll(roll_out);
+        motors->set_roll_ff(0.0f);
         _last_applied_motor_out.x = roll_out;
         if (suppress_integrators) {
             _att_control->get_rate_roll_pid().set_integrator(0.0f);
@@ -120,6 +127,7 @@ void AC_CustomControl::motor_set(const Vector3f& rpy) {
     if ((_custom_controller_mask & uint8_t(CustomControlOption::PITCH)) && pitch_valid) {
         const float pitch_out = constrain_float(rpy.y, -AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
         motors->set_pitch(pitch_out);
+        motors->set_pitch_ff(0.0f);
         _last_applied_motor_out.y = pitch_out;
         if (suppress_integrators) {
             _att_control->get_rate_pitch_pid().set_integrator(0.0f);
@@ -128,6 +136,7 @@ void AC_CustomControl::motor_set(const Vector3f& rpy) {
     if ((_custom_controller_mask & uint8_t(CustomControlOption::YAW)) && yaw_valid) {
         const float yaw_out = constrain_float(rpy.z, -AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX, AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX);
         motors->set_yaw(yaw_out);
+        motors->set_yaw_ff(0.0f);
         _last_applied_motor_out.z = yaw_out;
         if (suppress_integrators) {
             _att_control->get_rate_yaw_pid().set_integrator(0.0f);

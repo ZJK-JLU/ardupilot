@@ -23,14 +23,13 @@ public:
         bool output_limited;
         bool slew_limited;
         bool antiwindup_active;
-        bool external_leak_active;
         bool valid;
     };
 
     // Run one ADRC rate-loop update.
     // target and measurement are angular rates in rad/s.
     // output_limit is the final absolute mixer-output limit for this axis.
-    // output_scale is the final output multiplier, normally 1.0 and less than 1.0 only while spooling.
+    // output_scale is an optional final output multiplier. The multicopter backend passes 1.0.
     // The returned output is the actual value that should be applied to AP_Motors; the ESO is updated
     // using this same applied output so the observer input matches the actuator command.
     bool update_all(float target,
@@ -40,7 +39,6 @@ public:
                     float output_scale,
                     float native_output,
                     float custom_blend,
-                    float external_leak_fraction,
                     float& output,
                     UpdateDebug* debug = nullptr);
 
@@ -63,12 +61,6 @@ public:
     // values still override this during AC_CustomControl::init().
     void set_b0_default(float b0_default) { _b0.set(b0_default); }
 
-    // Rotate roll/pitch slow ESO states for helicopter piro compensation.  Call on the
-    // roll-axis object and pass the pitch-axis object.  This intentionally rotates z2
-    // for first- and second-order ADRC, and rotates z3 only when both axes are ORDR=2.
-    // z1 is not rotated because it is the measured angular-rate state.
-    void rotate_slow_states_xy(AC_ADRC& y_axis, float cos_yaw, float sin_yaw);
-
     // Accessors for logging and diagnosis.
     float get_z1() const { return _z1; }
     float get_z2() const { return _z2; }
@@ -84,7 +76,6 @@ protected:
     float apply_lpf(float input, float cutoff_hz, float& state, bool& initialised) const;
     float apply_notch(float input);
     void reset_runtime_state(float target, float measurement);
-    void leak_slow_states(float leak_fraction);
     void reset_debug(UpdateDebug* debug) const;
     void fill_debug(UpdateDebug* debug,
                     float target_filtered,
@@ -99,7 +90,6 @@ protected:
                     bool output_limited,
                     bool slew_limited,
                     bool antiwindup_active,
-                    bool external_leak_active,
                     bool valid) const;
 
     struct ap_adrc_flags {
@@ -114,7 +104,7 @@ protected:
     AP_Float _delta;       // fal linear zone length
     AP_Int8  _order;       // ADRC model order: 1 or 2
 
-    // Optional terms added for helicopter practical use. Defaults preserve the original ADRC law
+    // Optional terms added for practical multicopter rate-control use. Defaults preserve the original ADRC law
     // except for the light target/gyro low-pass filters.
     AP_Float _ff;          // rate feed-forward, normalized output per rad/s
     AP_Float _dff;         // target-rate derivative feed-forward
