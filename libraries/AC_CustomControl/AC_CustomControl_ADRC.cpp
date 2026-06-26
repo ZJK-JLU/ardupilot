@@ -568,8 +568,10 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
     flags |= (input.custom_blend < 0.999f) ? (1U << 13) : 0U;
     flags |= input.motors_active ? (1U << 14) : 0U;
 
+    const uint64_t now_us = AP_HAL::micros64();
+
     AP::logger().Write("CCAR", "TimeUS,TR,TP,TY,GR,GP,GY,RR,RP,RY,OR,OP,OY,Flg", "QffffffffffffI",
-                       AP_HAL::micros64(),
+                       now_us,
                        input.rate_target_body_radps.x,
                        input.rate_target_body_radps.y,
                        input.rate_target_body_radps.z,
@@ -585,7 +587,7 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
                        flags);
 
     AP::logger().Write("CCAS", "TimeUS,Z1R,Z2R,Z3R,Z1P,Z2P,Z3P,Z1Y,Z2Y,Z3Y,FR,FP,FY", "Qffffffffffff",
-                       AP_HAL::micros64(),
+                       now_us,
                        _rate_roll_adrc.get_z1(),
                        _rate_roll_adrc.get_z2(),
                        _rate_roll_adrc.get_z3(),
@@ -598,6 +600,18 @@ void AC_CustomControl_ADRC::log_adrc(const ControllerInput& input, const Control
                        _roll_debug.ff_output,
                        _pitch_debug.ff_output,
                        _yaw_debug.ff_output);
+
+    // Compact ESO-state log for direct ADRC observer analysis.  CCAS keeps the full
+    // state/FF record; CCAZ repeats the most commonly analysed ESO states (z1/z2)
+    // in a smaller, easier-to-plot message.
+    AP::logger().Write("CCAZ", "TimeUS,Z1R,Z2R,Z1P,Z2P,Z1Y,Z2Y", "Qffffff",
+                       now_us,
+                       _rate_roll_adrc.get_z1(),
+                       _rate_roll_adrc.get_z2(),
+                       _rate_pitch_adrc.get_z1(),
+                       _rate_pitch_adrc.get_z2(),
+                       _rate_yaw_adrc.get_z1(),
+                       _rate_yaw_adrc.get_z2());
 
     (void)output;
 }
