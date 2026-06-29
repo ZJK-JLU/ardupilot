@@ -228,6 +228,7 @@ const AP_Param::GroupInfo AP_MotorsHeli_RSC::var_info[] = {
 };
 
 // init_servo - servo initialization on start-up
+//默认情况下，把 RSC（旋翼转速控制）分配到第 X 个 PWM 通道上
 void AP_MotorsHeli_RSC::init_servo()
 {
     // setup RSC on specified channel by default
@@ -237,6 +238,7 @@ void AP_MotorsHeli_RSC::init_servo()
 
 // set_power_output_range
 // TODO: Look at possibly calling this at a slower rate.  Doesn't need to be called every cycle.
+//把5个“关键点”连成一条顺滑的曲线，方便飞控实时查表计算油门
 void AP_MotorsHeli_RSC::set_throttle_curve()
 {
     float thrcrv[5];
@@ -250,11 +252,12 @@ void AP_MotorsHeli_RSC::set_throttle_curve()
 }
 
 // output - update value to send to ESC/Servo
+//根据传入的 state（转子状态），计算最终的油门输出值 _control_output，并通过 write_rsc()发送给电调（ESC）或舵机。
 void AP_MotorsHeli_RSC::output(RotorControlState state)
 {
     // Store rsc state for logging
     _rsc_state = state;
-    // _rotor_RPM available to the RSC output
+    // _rotor_RPM available to the RSC output  如果装了转速计，就读真实的转速  没有就把 _rotor_rpm设为 -1
 #if AP_RPM_ENABLED
     const AP_RPM *rpm = AP_RPM::get_singleton();
     if (rpm != nullptr) {
@@ -270,6 +273,7 @@ void AP_MotorsHeli_RSC::output(RotorControlState state)
     _rotor_rpm = -1;
 #endif
 
+    //计算时间增量dt
     float dt;
     uint64_t now = AP_HAL::micros64();
     float last_control_output = _control_output;
@@ -283,24 +287,27 @@ void AP_MotorsHeli_RSC::output(RotorControlState state)
     }
 
     switch (state) {
-    case RotorControlState::STOP:
+    case RotorControlState::STOP://停止
         // set rotor ramp to decrease speed to zero, this happens instantly inside update_rotor_ramp()
+        //斜坡归零
         update_rotor_ramp(0.0f, dt);
 
         // control output forced to zero
+        //输出归零
         _control_output = 0.0f;
 
         // governor is forced to disengage status and reset outputs
+        //调速器重置
         governor_reset();
         _autothrottle = false;
         _governor_fault = false;
-        //turbine start flag on
+        //turbine start flag on 标记 准备启动
         _starting = true;
 
-        // ensure we always deactivate the autorotation state if we disarm
+        // ensure we always deactivate the autorotation state if we disarm强制关闭自转模式 即使飞控认为现在正处于自转中，也要强行退出
         autorotation.set_active(false, true);
 
-        // ensure _idle_throttle not set to invalid value
+        // ensure _idle_throttle not set to invalid value怠速油门值恢复为参数设定的默认值 H_RSC_IDLE
         _idle_throttle = get_idle_output();
 
         // reset fast idle timer
@@ -308,11 +315,11 @@ void AP_MotorsHeli_RSC::output(RotorControlState state)
 
         break;
 
-    case RotorControlState::IDLE:
-        // set rotor ramp to decrease speed to zero
+    case RotorControlState::IDLE://怠速
+        // set rotor ramp to decrease speed to zero 斜坡归零
         update_rotor_ramp(0.0f, dt);
 
-        // set rotor control speed to engine idle and ensure governor is reset, if used
+        // set rotor control speed to engine idle and ensure governor is reset, if used禁用并重置调速器（Governor）
         governor_reset();
         _autothrottle = false;
         _governor_fault = false;
