@@ -207,7 +207,7 @@ void AP_MotorsHeli::output_min()
 // output - sends commands to the servos
 void AP_MotorsHeli::output()
 {
-    // update throttle filter
+    // update throttle filter对总距输入进行滤波
     update_throttle_filter();
 
     // run spool logic
@@ -228,7 +228,7 @@ void AP_MotorsHeli::output()
 
 };
 
-// sends commands to the motors
+// sends commands to the motors 主要关注move_actuators（）
 void AP_MotorsHeli::output_armed_stabilizing()
 {
     // if manual override active after arming, deactivate it and reinitialize servos

@@ -96,6 +96,7 @@ AP_MotorsHeli_Swash::AP_MotorsHeli_Swash(uint8_t mot_0, uint8_t mot_1, uint8_t m
 }
 
 // configure - configure the swashplate settings for any updated parameters
+//配置斜盘类型 总距运动方向  是否线性化 默认用H3
 void AP_MotorsHeli_Swash::configure()
 {
 
@@ -107,7 +108,7 @@ void AP_MotorsHeli_Swash::configure()
     calculate_roll_pitch_collective_factors();
 }
 
-// CCPM Mixers - calculate mixing scale factors by swashplate type
+// CCPM Mixers - calculate mixing scale factors by swashplate type 计算斜盘类型对应的混合比例因子
 void AP_MotorsHeli_Swash::calculate_roll_pitch_collective_factors()
 {
     // Clear existing setup
@@ -145,7 +146,7 @@ void AP_MotorsHeli_Swash::calculate_roll_pitch_collective_factors()
             break;
 
         case SWASHPLATE_TYPE_H3_120:
-            // three-servo roll/pitch mixer for H3-120
+            // three-servo roll/pitch mixer for H3-120  需要使用的斜盘类型
             // HR3-120 uses reversed servo and collective direction in heli setup
             // not a pure mixing swashplate, phase angle is adjustable
             add_servo_angle(CH_1, -60.0, 1.0);
@@ -177,14 +178,17 @@ void AP_MotorsHeli_Swash::calculate_roll_pitch_collective_factors()
 
 }
 
+//角度方式配置
 void AP_MotorsHeli_Swash::add_servo_angle(uint8_t num, float angle, float collective)
 {
+    //roll轴angle + 90 因为横滚轴超前俯仰轴90°
     add_servo_raw(num,
                   cosf(radians(angle + 90)),
                   cosf(radians(angle)),
                   collective);
 }
 
+//原始因子方式配置
 void AP_MotorsHeli_Swash::add_servo_raw(uint8_t num, float roll, float pitch, float collective)
 {
     if (num >= _max_num_servos) {
@@ -234,7 +238,7 @@ void AP_MotorsHeli_Swash::calculate(float roll, float pitch, float collective)
             _output[i] += 0.5f;
         }
 
-        // rescale from -1..1, so we can use the pwm calc that includes trim
+        // rescale from -1..1, so we can use the pwm calc that includes trim 0，1到1，1
         _output[i] = 2.0f * _output[i] - 1.0f;
 
         if (_make_servo_linear) {
@@ -255,7 +259,7 @@ float AP_MotorsHeli_Swash::get_linear_servo_output(float input) const
 
 }
 
-// Output calculated values to servos
+// Output calculated values to servos 将输出值发动到舵机
 void AP_MotorsHeli_Swash::output()
 {
     for (uint8_t i = 0; i < _max_num_servos; i++) {
@@ -268,7 +272,7 @@ void AP_MotorsHeli_Swash::output()
 // convert input in -1 to +1 range to pwm output for swashplate servo.
 // The value 0 corresponds to the trim value of the servo. Swashplate
 // servo travel range is fixed to 1000 pwm and therefore the input is
-// multiplied by 500 to get PWM output.
+// multiplied by 500 to get PWM output.  将 -1~+1 范围的控制值转换为标准 PWM 信号（1000~2000us）
 void AP_MotorsHeli_Swash::rc_write(uint8_t chan, float swash_in)
 {
     uint16_t pwm = (uint16_t)(1500 + 500 * swash_in);
@@ -276,7 +280,7 @@ void AP_MotorsHeli_Swash::rc_write(uint8_t chan, float swash_in)
     SRV_Channels::set_output_pwm_trimmed(function, pwm);
 }
 
-// Get function output mask
+// Get function output mask 生成一个 32 位掩码，标识哪些输出通道被倾斜盘伺服使用。
 uint32_t AP_MotorsHeli_Swash::get_output_mask() const
 {
     uint32_t mask = 0;

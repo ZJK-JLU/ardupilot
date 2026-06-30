@@ -130,7 +130,7 @@ public:
     bool                get_spoolup_block() const { return _spoolup_block; }
     void                set_spoolup_block(bool set) { _spoolup_block = set; }
 
-    // set_roll, set_pitch, set_yaw, set_throttle
+    // set_roll, set_pitch, set_yaw, set_throttle总距、俯仰、滚转控制量输入口
     void                set_roll(float roll_in) { _roll_in = roll_in; };        // range -1 ~ +1
     void                set_roll_ff(float roll_in) { _roll_in_ff = roll_in; };    // range -1 ~ +1
     void                set_pitch(float pitch_in) { _pitch_in = pitch_in; };    // range -1 ~ +1

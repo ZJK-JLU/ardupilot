@@ -365,7 +365,7 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
     // rescale roll_out and pitch_out into the min and max ranges to provide linear motion
     // across the input range instead of stopping when the input hits the constrain value
     // these calculations are based on an assumption of the user specified cyclic_max
-    // coming into this equation at 4500 or less
+    // coming into this equation at 4500 or less roll pith整体限幅
     float total_out = norm(pitch_out, roll_out);
 
     if (total_out > (_cyclic_max/4500.0f)) {
@@ -376,7 +376,7 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
         limit.pitch = true;
     }
 
-    // constrain collective input
+    // constrain collective input 限制总距输入
     float collective_out = coll_in;
     if (collective_out <= 0.0f) {
         collective_out = 0.0f;
@@ -387,7 +387,7 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
         limit.throttle_upper = true;
     }
 
-    // ensure not below landed/landing collective
+    // ensure not below landed/landing collective 将 collective_out 强制设置为 _collective_land_min_pct（着陆最小总距）
     if (_heliflags.landing_collective && collective_out < _collective_land_min_pct && !_main_rotor.in_autorotation()) {
         collective_out = _collective_land_min_pct;
         limit.throttle_lower = true;
@@ -408,14 +408,14 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
 
     // feed power estimate into main rotor controller
     // ToDo: include tail rotor power?
-    // ToDo: add main rotor cyclic power?
+    // ToDo: add main rotor cyclic power? 送到主旋翼RSC 用于油门舵机控制
     _main_rotor.set_collective(fabsf(collective_out));
 
-    // scale collective pitch for swashplate servos
+    // scale collective pitch for swashplate servos 总距col变为斜盘col 斜盘col=总距col·0.5+0.25
     float collective_scalar = ((float)(_collective_max-_collective_min))*0.001f;
     float collective_out_scaled = collective_out * collective_scalar + (_collective_min - 1000)*0.001f;
 
-    // Caculate servo positions from swashplate library
+    // Caculate servo positions from swashplate library 输入到swash计算舵机输出
     _swashplate.calculate(roll_out, pitch_out, collective_out_scaled);
 
     // update the yaw rate using the tail rotor/servo
@@ -466,13 +466,14 @@ float AP_MotorsHeli_Single::get_yaw_offset(float collective)
     return yaw_offset;
 }
 
+//
 void AP_MotorsHeli_Single::output_to_motors()
 {
     if (!initialised_ok()) {
         return;
     }
 
-    // Write swashplate outputs
+    // Write swashplate outputs 输出倾斜盘伺服输出
     _swashplate.output();
 
     // Output main rotor
